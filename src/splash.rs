@@ -143,10 +143,16 @@ fn set_movable_by_background(window: &tao::window::Window) {
 
 #[cfg(target_os = "macos")]
 fn set_window_corner_radius(window: &tao::window::Window, radius: f64) {
-    use objc::{msg_send, sel, sel_impl};
+    use objc::{msg_send, sel, sel_impl, class};
     use tao::platform::macos::WindowExtMacOS;
     unsafe {
         let ns_window = window.ns_window() as *mut objc::runtime::Object;
+
+        // Make window background fully transparent
+        let _: () = msg_send![ns_window, setOpaque: false];
+        let clear_color: *mut objc::runtime::Object =
+            msg_send![class!(NSColor), clearColor];
+        let _: () = msg_send![ns_window, setBackgroundColor: clear_color];
 
         // Round the content view layer
         let content_view: *mut objc::runtime::Object =
