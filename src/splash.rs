@@ -37,11 +37,13 @@ pub fn run(rx: Receiver<SplashCmd>) {
         .with_inner_size(LogicalSize::new(300u32, 340u32))
         .with_resizable(false)
         .with_decorations(false)
-        .with_transparent(false)
+        // Transparent so rounded corners show through to the desktop
+        .with_transparent(true)
         .with_always_on_top(true)
         .build(&event_loop)
         .expect("Failed to create splash window");
 
+    // Center the window
     if let Some(monitor) = window.current_monitor() {
         let screen = monitor.size();
         let win = window.outer_size();
@@ -56,16 +58,11 @@ pub fn run(rx: Receiver<SplashCmd>) {
     use base64::Engine;
     let logo_b64 = base64::engine::general_purpose::STANDARD.encode(LOGO_PNG);
     let logo_data_url = format!("data:image/png;base64,{}", logo_b64);
-
     let html = SPLASH_HTML.replace("__LOGO_DATA_URL__", &logo_data_url);
-    let html_data_url = format!(
-        "data:text/html;charset=utf-8,{}",
-        urlencoding_encode(&html)
-    );
 
     let webview = WebViewBuilder::new()
-        .with_url(&html_data_url)
-        .with_transparent(false)
+        .with_html(html)           // use with_html instead of data: URL — avoids white flash
+        .with_transparent(true)    // transparent WebView background
         .with_devtools(false)
         .build(&window)
         .expect("Failed to create WebView");
@@ -120,32 +117,12 @@ fn handle_cmd(
     }
 }
 
-fn urlencoding_encode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'
-            | b'-' | b'_' | b'.' | b'!' | b'~' | b'*'
-            | b'\'' | b'(' | b')' | b'/' | b'<' | b'>'
-            | b'=' | b':' | b',' | b';' | b'@' | b'#'
-            | b'+' | b'?' | b'&' | b' ' | b'\n' | b'\t' => {
-                out.push(b as char);
-            }
-            _ => {
-                out.push('%');
-                out.push_str(&format!("{:02X}", b));
-            }
-        }
-    }
-    out
-}
-
 #[cfg(target_os = "macos")]
 fn set_activation_policy_accessory() {
     use objc::{msg_send, sel, sel_impl, class};
     unsafe {
         let app: *mut objc::runtime::Object =
             msg_send![class!(NSApplication), sharedApplication];
-        let _: () = msg_send![app, setActivationPolicy: 1i64]; // NSApplicationActivationPolicyAccessory
+        let _: () = msg_send![app, setActivationPolicy: 1i64];
     }
 }

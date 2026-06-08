@@ -9,10 +9,10 @@
             width: 300px;
             height: 340px;
             overflow: hidden;
+            background: transparent;
         }
 
         body {
-            background: #241927;
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -21,15 +21,35 @@
             user-select: none;
             -webkit-user-select: none;
             cursor: default;
+            /* Makes the whole window draggable */
+            -webkit-app-region: drag;
+        }
+
+        .window {
+            width: 300px;
+            height: 340px;
+            background: #241927;
+            border-radius: 16px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            /* Subtle border for definition on light desktops */
+            box-shadow: 0 0 0 1px rgba(255, 247, 251, 0.08),
+            0 32px 64px rgba(0, 0, 0, 0.6);
         }
 
         .logo-wrap {
             width: 88px;
             height: 88px;
+            border-radius: 22px;
             overflow: hidden;
             margin-bottom: 24px;
             box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
             flex-shrink: 0;
+            /* Prevent logo from being a drag target */
+            -webkit-app-region: no-drag;
         }
 
         .logo-wrap img {
@@ -37,6 +57,13 @@
             height: 100%;
             object-fit: cover;
             display: block;
+            /* Fade in once loaded */
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .logo-wrap img.loaded {
+            opacity: 1;
         }
 
         .app-name {
@@ -75,7 +102,7 @@
 
         .progress-fill {
             height: 100%;
-            width: 0;
+            width: 0%;
             background: #00D1C1;
             border-radius: 999px;
             transition: width 0.2s ease;
@@ -106,27 +133,40 @@
         }
 
         .dot-wrap.hidden { display: none; }
+
+        /* Fade in the whole window to avoid flash */
+        .window {
+            opacity: 0;
+            animation: fadeIn 0.2s ease 0.05s forwards;
+        }
+
+        @keyframes fadeIn {
+            to { opacity: 1; }
+        }
     </style>
 </head>
 <body>
 
-<div class="logo-wrap">
-    <img src="__LOGO_DATA_URL__" alt="Mutualzz" />
-</div>
+<div class="window">
+    <div class="logo-wrap">
+        <img id="logo" src="__LOGO_DATA_URL__" alt="Mutualzz"
+             onload="this.classList.add('loaded')" />
+    </div>
 
-<div class="app-name">Mutualzz</div>
-<div class="status" id="status">Checking for updates...</div>
+    <div class="app-name">Mutualzz</div>
+    <div class="status" id="status">Checking for updates...</div>
 
-<div class="progress-track" id="track">
-    <div class="progress-fill" id="fill"></div>
-</div>
+    <div class="progress-track" id="track">
+        <div class="progress-fill" id="fill"></div>
+    </div>
 
-<div class="bottom">
-    <div class="dot-wrap" id="dots">
-        <div style="display:flex;gap:6px">
-            <div class="dot"></div>
-            <div class="dot"></div>
-            <div class="dot"></div>
+    <div class="bottom">
+        <div class="dot-wrap" id="dots">
+            <div style="display:flex;gap:6px">
+                <div class="dot"></div>
+                <div class="dot"></div>
+                <div class="dot"></div>
+            </div>
         </div>
     </div>
 </div>
