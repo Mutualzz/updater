@@ -11,7 +11,7 @@ use log::{error, info};
 use crate::SplashCmd;
 
 const SPLASH_HTML: &str = include_str!("splash.html");
-const LOGO_PNG: &[u8] = include_bytes!("../resources/logo.png");
+const LOGO_PNG: &[u8] = include_bytes!("../resources/icon.png");
 
 #[derive(Debug)]
 enum UserEvent {
