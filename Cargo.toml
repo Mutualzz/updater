@@ -1,0 +1,39 @@
+[package]
+name = "updater"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "updater"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+semver = "1"
+sha2 = "0.10"
+hex = "0.4"
+dirs = "5"
+zip = "2"
+tar = "0.4"
+flate2 = "1"
+interprocess = { version = "2", features = ["tokio"] }
+log = "0.4"
+env_logger = "0.11.10"
+futures-util = "0.3"
+tokio-util = { version = "0.7", features = ["io"] }
+tao = "0.30"
+wry = "0.46"
+base64 = "0.22"
+anyhow = "1.0.102"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc = "0.2"
