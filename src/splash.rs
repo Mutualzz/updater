@@ -54,12 +54,7 @@ pub fn run(rx: Receiver<SplashCmd>) {
     #[cfg(target_os = "macos")]
     {
         set_activation_policy_accessory();
-
-        // Allow dragging the window by clicking anywhere on it
-        use tao::platform::macos::WindowExtMacOS;
-        window.set_movable_by_window_background(true);
-
-        // Round the OS-level window corners
+        set_movable_by_background(&window);
         set_window_corner_radius(&window, 16.0);
     }
 
@@ -71,9 +66,7 @@ pub fn run(rx: Receiver<SplashCmd>) {
     let webview = WebViewBuilder::new()
         .with_html(html)
         .with_transparent(true)
-        // Set native background color to prevent white flash before HTML renders
-        .with_background_color((36, 25, 39, 255))  // #241927
-        // Set to true to right-click inspect during development
+        .with_background_color((36, 25, 39, 255))  // #241927 — prevents white flash
         .with_devtools(false)
         .build(&window)
         .expect("Failed to create WebView");
@@ -139,14 +132,21 @@ fn set_activation_policy_accessory() {
 }
 
 #[cfg(target_os = "macos")]
+fn set_movable_by_background(window: &tao::window::Window) {
+    use objc::{msg_send, sel, sel_impl};
+    use tao::platform::macos::WindowExtMacOS;
+    unsafe {
+        let ns_window = window.ns_window() as *mut objc::runtime::Object;
+        let _: () = msg_send![ns_window, setMovableByWindowBackground: true];
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn set_window_corner_radius(window: &tao::window::Window, radius: f64) {
     use objc::{msg_send, sel, sel_impl};
     use tao::platform::macos::WindowExtMacOS;
     unsafe {
         let ns_window = window.ns_window() as *mut objc::runtime::Object;
-
-        // Round the window itself
-        let _: () = msg_send![ns_window, setCornerMask: 9u64]; // NSWindowMaskRounded
 
         // Round the content view layer
         let content_view: *mut objc::runtime::Object =
