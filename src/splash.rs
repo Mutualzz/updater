@@ -55,7 +55,7 @@ pub fn run(rx: Receiver<SplashCmd>) {
     {
         set_activation_policy_accessory();
         set_movable_by_background(&window);
-        set_window_corner_radius(&window, 16.0);
+        set_window_style(&window, 16.0);
     }
 
     use base64::Engine;
@@ -66,7 +66,7 @@ pub fn run(rx: Receiver<SplashCmd>) {
     let webview = WebViewBuilder::new()
         .with_html(html)
         .with_transparent(true)
-        .with_background_color((36, 25, 39, 255))  // #241927 — prevents white flash
+        .with_background_color((0, 0, 0, 0))
         .with_devtools(false)
         .build(&window)
         .expect("Failed to create WebView");
@@ -142,25 +142,17 @@ fn set_movable_by_background(window: &tao::window::Window) {
 }
 
 #[cfg(target_os = "macos")]
-fn set_window_corner_radius(window: &tao::window::Window, radius: f64) {
+fn set_window_style(window: &tao::window::Window, radius: f64) {
     use objc::{msg_send, sel, sel_impl, class};
     use tao::platform::macos::WindowExtMacOS;
     unsafe {
         let ns_window = window.ns_window() as *mut objc::runtime::Object;
 
-        // Make window background fully transparent
+        // Transparent background so corners show desktop
         let _: () = msg_send![ns_window, setOpaque: false];
-        let clear_color: *mut objc::runtime::Object =
+        let clear: *mut objc::runtime::Object =
             msg_send![class!(NSColor), clearColor];
-        let _: () = msg_send![ns_window, setBackgroundColor: clear_color];
-
-        // Round the content view layer
-        let content_view: *mut objc::runtime::Object =
-            msg_send![ns_window, contentView];
-        let _: () = msg_send![content_view, setWantsLayer: true];
-        let layer: *mut objc::runtime::Object =
-            msg_send![content_view, layer];
-        let _: () = msg_send![layer, setCornerRadius: radius];
-        let _: () = msg_send![layer, setMasksToBounds: true];
+        let _: () = msg_send![ns_window, setBackgroundColor: clear];
+        let _: () = msg_send![ns_window, _setCornerRadius: radius];
     }
 }

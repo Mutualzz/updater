@@ -3,13 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
 
         html, body {
             width: 300px;
             height: 340px;
             overflow: hidden;
             background: transparent;
+            border-radius: 16px;
         }
 
         body {
@@ -21,7 +22,6 @@
             user-select: none;
             -webkit-user-select: none;
             cursor: default;
-            /* Makes the whole window draggable */
             -webkit-app-region: drag;
         }
 
@@ -30,14 +30,21 @@
             height: 340px;
             background: #241927;
             border-radius: 16px;
+            overflow: hidden;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
             position: relative;
-            /* Subtle border for definition on light desktops */
             box-shadow: 0 0 0 1px rgba(255, 247, 251, 0.08),
             0 32px 64px rgba(0, 0, 0, 0.6);
+            animation: fadeIn 0.15s ease forwards;
+            -webkit-app-region: drag;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to   { opacity: 1; }
         }
 
         .logo-wrap {
@@ -48,8 +55,7 @@
             margin-bottom: 24px;
             box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
             flex-shrink: 0;
-            /* Prevent logo from being a drag target */
-            -webkit-app-region: no-drag;
+            -webkit-app-region: drag;
         }
 
         .logo-wrap img {
@@ -57,7 +63,6 @@
             height: 100%;
             object-fit: cover;
             display: block;
-            /* Fade in once loaded */
             opacity: 0;
             transition: opacity 0.3s ease;
         }
@@ -133,20 +138,9 @@
         }
 
         .dot-wrap.hidden { display: none; }
-
-        /* Fade in the whole window to avoid flash */
-        .window {
-            opacity: 0;
-            animation: fadeIn 0.2s ease 0.05s forwards;
-        }
-
-        @keyframes fadeIn {
-            to { opacity: 1; }
-        }
     </style>
 </head>
 <body>
-
 <div class="window">
     <div class="logo-wrap">
         <img id="logo" src="__LOGO_DATA_URL__" alt="Mutualzz"
@@ -193,6 +187,5 @@
         dots.classList.remove('hidden');
     };
 </script>
-
 </body>
 </html>

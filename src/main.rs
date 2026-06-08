@@ -3,11 +3,13 @@ mod platform;
 mod splash;
 mod update;
 
-use std::sync::Arc;
 use std::process::Stdio;
+use std::sync::Arc;
 use tokio::process::Command;
-use tokio::sync::{broadcast, mpsc, Mutex};
+use tokio::sync::{broadcast, Mutex};
 use log::{error, info, warn};
+
+pub use update::UpdateManifest;
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
@@ -36,17 +38,42 @@ pub enum SplashCmd {
 
 fn main() {
     env_logger::init();
+
+    if std::env::args().any(|a| a == "--splash-test") {
+        let (tx, rx) = std::sync::mpsc::channel::<SplashCmd>();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            let _ = tx.send(SplashCmd::SetStatus("Checking for updates...".into()));
+            std::thread::sleep(std::time::Duration::from_secs(1));
+
+            let _ = tx.send(SplashCmd::SetStatus("Downloading update 6.5.0...".into()));
+            for i in 0..=100 {
+                let _ = tx.send(SplashCmd::SetProgress(i as f64));
+                let _ = tx.send(SplashCmd::SetStatus(format!("Downloading... {}%", i)));
+                std::thread::sleep(std::time::Duration::from_millis(30));
+            }
+
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            let _ = tx.send(SplashCmd::SetStatus("Launching Mutualzz...".into()));
+            let _ = tx.send(SplashCmd::HideProgress);
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            let _ = tx.send(SplashCmd::Close);
+        });
+        splash::run(rx);
+        return;
+    }
+
     info!("Mutualzz bootstrapper starting");
-    
+
     let (splash_tx, splash_rx) = std::sync::mpsc::channel::<SplashCmd>();
-    
+
     let splash_tx_async = splash_tx.clone();
 
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
         rt.block_on(async_main(splash_tx_async));
     });
-    
+
     splash::run(splash_rx);
 }
 
@@ -54,7 +81,7 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
     let (outbound_tx, _) = broadcast::channel::<OutboundMsg>(32);
     let outbound_tx = Arc::new(outbound_tx);
 
-    let (inbound_tx, mut inbound_rx) = mpsc::channel::<InboundMsg>(8);
+    let (inbound_tx, mut inbound_rx) = tokio::sync::mpsc::channel::<InboundMsg>(8);
     let pending_update: Arc<Mutex<Option<std::path::PathBuf>>> = Arc::new(Mutex::new(None));
 
     let _ = splash_tx.send(SplashCmd::SetStatus("Checking for updates...".into()));
@@ -75,14 +102,12 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
                 let mb_total = total as f64 / 1_048_576.0;
                 let _ = tx.send(SplashCmd::SetProgress(percent));
                 let _ = tx.send(SplashCmd::SetStatus(format!(
-                    "Downloading... {:.1} / {:.1} MB",
-                    mb_done, mb_total
-                )));
-                let _ = tx.send(SplashCmd::SetStatus(format!(
                     "Downloading... {:.0}%  ({:.1} MB/s)",
                     percent,
                     bps as f64 / 1_048_576.0
                 )));
+                let _ = mb_done;
+                let _ = mb_total;
             })
                 .await
             {
@@ -118,7 +143,7 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
             let _ = splash_tx.send(SplashCmd::SetStatus("Could not check for updates".into()));
         }
     }
-    
+
     tokio::time::sleep(std::time::Duration::from_millis(600)).await;
 
     let _ = splash_tx.send(SplashCmd::SetStatus("Launching Mutualzz...".into()));
@@ -157,7 +182,7 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
             }
         });
     }
-    
+
     while let Some(msg) = inbound_rx.recv().await {
         match msg {
             InboundMsg::ApplyUpdate => {
@@ -183,7 +208,6 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
         }
     }
 
-    // Wait for Electron to exit
     let _ = child.wait().await;
     std::process::exit(0);
 }
