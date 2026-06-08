@@ -9,7 +9,6 @@ use tokio::process::Command;
 use tokio::sync::{broadcast, mpsc, Mutex};
 use log::{error, info, warn};
 
-/// Messages bootstrapper → Electron app
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum OutboundMsg {
@@ -20,7 +19,6 @@ pub enum OutboundMsg {
     NoUpdate,
 }
 
-/// Messages Electron app → bootstrapper
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum InboundMsg {
@@ -28,7 +26,6 @@ pub enum InboundMsg {
     CheckUpdate,
 }
 
-/// Commands from async tasks → splash UI thread
 #[derive(Debug, Clone)]
 pub enum SplashCmd {
     SetStatus(String),
@@ -40,22 +37,16 @@ pub enum SplashCmd {
 fn main() {
     env_logger::init();
     info!("Mutualzz bootstrapper starting");
-
-    // splash_tx sends commands to the UI thread
-    // splash_rx is consumed by the event loop in splash::run
+    
     let (splash_tx, splash_rx) = std::sync::mpsc::channel::<SplashCmd>();
-
-    // Clone for the async runtime thread
+    
     let splash_tx_async = splash_tx.clone();
 
-    // Spawn the Tokio runtime on a background thread so the main thread
-    // stays free for the tao event loop (required on macOS)
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
         rt.block_on(async_main(splash_tx_async));
     });
-
-    // Run the splash window on the main thread (required by tao/wry on macOS)
+    
     splash::run(splash_rx);
 }
 
@@ -104,9 +95,7 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
                         error!("Failed to apply update: {}", e);
                         let _ = splash_tx.send(SplashCmd::SetStatus(format!("Update failed: {}", e)));
                         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                        // Fall through and launch the existing version
                     } else {
-                        // apply_update relaunches bootstrapper — we never reach here
                         return;
                     }
                 }
@@ -129,14 +118,12 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
             let _ = splash_tx.send(SplashCmd::SetStatus("Could not check for updates".into()));
         }
     }
-
-    // Brief pause so the user sees the status before we launch
+    
     tokio::time::sleep(std::time::Duration::from_millis(600)).await;
 
     let _ = splash_tx.send(SplashCmd::SetStatus("Launching Mutualzz...".into()));
     let _ = splash_tx.send(SplashCmd::HideProgress);
 
-    // 2. Launch Electron
     let electron_path = platform::electron_exe_path();
     info!("Launching Electron: {}", electron_path.display());
 
@@ -147,11 +134,9 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
         .spawn()
         .expect("Failed to launch Electron");
 
-    // Give Electron a moment to start before closing splash
     tokio::time::sleep(std::time::Duration::from_millis(800)).await;
     let _ = splash_tx.send(SplashCmd::Close);
 
-    // 3. Start IPC server for in-app update checks (green button flow)
     let ipc_tx = Arc::clone(&outbound_tx);
     tokio::spawn(async move {
         if let Err(e) = ipc::serve(ipc_tx, inbound_tx).await {
@@ -159,22 +144,20 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
         }
     });
 
-    // 4. Periodic background update check every hour
     {
         let tx = Arc::clone(&outbound_tx);
         let pending = Arc::clone(&pending_update);
         tokio::spawn(async move {
             let mut interval =
                 tokio::time::interval(std::time::Duration::from_secs(3600));
-            interval.tick().await; // skip immediate
+            interval.tick().await;
             loop {
                 interval.tick().await;
                 run_background_check(Arc::clone(&tx), Arc::clone(&pending)).await;
             }
         });
     }
-
-    // 5. Handle inbound messages from Electron (green button install)
+    
     while let Some(msg) = inbound_rx.recv().await {
         match msg {
             InboundMsg::ApplyUpdate => {
@@ -205,7 +188,6 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
     std::process::exit(0);
 }
 
-/// Background update check (post-launch, no splash window)
 async fn run_background_check(
     tx: Arc<broadcast::Sender<OutboundMsg>>,
     pending: Arc<Mutex<Option<std::path::PathBuf>>>,

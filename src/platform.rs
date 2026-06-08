@@ -1,12 +1,7 @@
 use std::path::PathBuf;
 use log::info;
 
-/// Returns the path to the real Electron binary.
-/// On macOS, afterPack.js renames it to MutualzzApp so the updater
-/// can take the "Mutualzz" slot as the .app entry point.
 pub fn electron_exe_path() -> PathBuf {
-    // Allow override for local testing:
-    // UPDATER_ELECTRON_PATH=/path/to/binary cargo run
     if let Ok(path) = std::env::var("UPDATER_ELECTRON_PATH") {
         return PathBuf::from(path);
     }
@@ -15,7 +10,6 @@ pub fn electron_exe_path() -> PathBuf {
     let dir = bootstrapper.parent().expect("No parent dir");
 
     #[cfg(target_os = "macos")]
-    // afterPack.js renames the Electron binary from "Mutualzz" → "MutualzzApp"
     return dir.join("MutualzzApp");
 
     #[cfg(target_os = "windows")]
@@ -25,13 +19,11 @@ pub fn electron_exe_path() -> PathBuf {
     return dir.join("mutualzz");
 }
 
-/// Returns the install root of the app bundle.
 pub fn install_dir() -> PathBuf {
     let bootstrapper = std::env::current_exe().expect("Cannot resolve bootstrapper path");
     let dir = bootstrapper.parent().expect("No parent dir");
 
     #[cfg(target_os = "macos")]
-    // MacOS/ → Contents/ → Mutualzz.app/
     return dir
         .parent()
         .and_then(|p| p.parent())
