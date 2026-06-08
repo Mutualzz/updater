@@ -90,6 +90,12 @@ where
 
     let file_name = asset.url.split('/').last().unwrap_or("update");
     let dest = tmp_dir.join(file_name);
+
+    if dest.exists() {
+        info!("Removing stale download: {}", dest.display());
+        tokio::fs::remove_file(&dest).await.ok();
+    }
+
     let mut file = tokio::fs::File::create(&dest).await?;
     let mut stream = response.bytes_stream();
     let start = std::time::Instant::now();
