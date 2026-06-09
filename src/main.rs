@@ -4,7 +4,6 @@ mod ipc;
 mod platform;
 mod splash;
 mod update;
-mod build;
 
 use std::process::Stdio;
 use std::sync::Arc;
