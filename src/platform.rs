@@ -42,12 +42,15 @@ pub fn is_app_already_running() -> bool {
     #[cfg(target_os = "windows")]
     {
         use std::process::Command;
-        let output = Command::new("tasklist")
+        let Ok(output) = Command::new("tasklist")
             .args(["/FI", "IMAGENAME eq mutualzz.exe", "/NH", "/FO", "CSV"])
             .output()
-            .unwrap_or_default();
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        stdout.to_lowercase().contains("mutualzz.exe")
+        else {
+            return false;
+        };
+        String::from_utf8_lossy(&output.stdout)
+            .to_lowercase()
+            .contains("mutualzz.exe")
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -109,8 +112,6 @@ async fn apply_dmg(
 ) -> anyhow::Result<()> {
     use tokio::process::Command;
 
-    // Use -plist output for reliable structured parsing
-    // -noverify skips checksum verification (we already verified)
     let out = Command::new("hdiutil")
         .args(["attach", "-nobrowse", "-noverify", "-plist"])
         .arg(dmg_path)
