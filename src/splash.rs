@@ -59,9 +59,7 @@ pub fn run(rx: Receiver<SplashCmd>) {
     }
 
     #[cfg(target_os = "windows")]
-    {
-        set_windows_transparency(&window);
-    }
+    set_windows_transparency(&window);
 
     use base64::Engine;
     let logo_b64 = base64::engine::general_purpose::STANDARD.encode(LOGO_PNG);
@@ -71,7 +69,7 @@ pub fn run(rx: Receiver<SplashCmd>) {
     let webview = WebViewBuilder::new()
         .with_html(html)
         .with_transparent(true)
-        .with_background_color((36, 25, 39, 255))  // #241927 — solid fallback
+        .with_background_color((36, 25, 39, 255))
         .with_devtools(false)
         .build(&window)
         .expect("Failed to create WebView");
@@ -156,7 +154,6 @@ fn set_window_transparent(window: &tao::window::Window) {
         let clear: *mut objc::runtime::Object =
             msg_send![class!(NSColor), clearColor];
         let _: () = msg_send![ns_window, setBackgroundColor: clear];
-        // Private API — rounds the NSWindow frame at OS level
         let _: () = msg_send![ns_window, _setCornerRadius: 16.0_f64];
     }
 }
@@ -164,30 +161,29 @@ fn set_window_transparent(window: &tao::window::Window) {
 #[cfg(target_os = "windows")]
 fn set_windows_transparency(window: &tao::window::Window) {
     use tao::platform::windows::WindowExtWindows;
-    use windows::Win32::Graphics::Dwm::{
+    use windows_sys::Win32::Graphics::Dwm::{
         DwmExtendFrameIntoClientArea, DwmSetWindowAttribute,
-        DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND, DWM_BLURBEHIND,
+        DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
     };
-    use windows::Win32::UI::Controls::MARGINS;
+    use windows_sys::Win32::UI::Controls::MARGINS;
 
     unsafe {
-        let hwnd = windows::Win32::Foundation::HWND(window.hwnd() as isize);
+        let hwnd = window.hwnd() as isize;
 
-        // Enable DWM composition for transparency
         let margins = MARGINS {
             cxLeftWidth: -1,
             cxRightWidth: -1,
             cyTopHeight: -1,
             cyBottomHeight: -1,
         };
-        let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
+        DwmExtendFrameIntoClientArea(hwnd, &margins);
 
-        // Round corners on Windows 11
-        let preference = DWMWCP_ROUND.0 as u32;
-        let _ = DwmSetWindowAttribute(
+        // Rounded corners on Windows 11
+        let preference = DWMWCP_ROUND as u32;
+        DwmSetWindowAttribute(
             hwnd,
             DWMWA_WINDOW_CORNER_PREFERENCE,
-            &preference as *const _ as *const _,
+            &preference as *const _ as *const std::ffi::c_void,
             std::mem::size_of::<u32>() as u32,
         );
     }

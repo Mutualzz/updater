@@ -28,6 +28,7 @@ tao = "0.30"
 wry = "0.46"
 base64 = "0.22"
 anyhow = "1"
+windows-sys = "0.61.2"
 
 [build-dependencies]
 winres = "0.1"
