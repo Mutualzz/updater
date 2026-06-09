@@ -28,12 +28,20 @@ tao = "0.30"
 wry = "0.46"
 base64 = "0.22"
 anyhow = "1"
+windows = "0.62.2"
 
 [build-dependencies]
 winres = "0.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_UI_Controls",
+] }
 
 [profile.release]
 opt-level = "z"
