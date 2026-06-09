@@ -85,7 +85,7 @@ async fn apply_dmg(dmg_path: &std::path::Path, install_dir: &std::path::Path) ->
     use tokio::process::Command;
 
     let out = Command::new("hdiutil")
-        .args(["attach", "-nobrowse", "-quiet"])
+        .args(["attach", "-nobrowse", "-quiet", "-noverify"])
         .arg(dmg_path)
         .output()
         .await?;
@@ -98,12 +98,22 @@ async fn apply_dmg(dmg_path: &std::path::Path, install_dir: &std::path::Path) ->
     }
 
     let stdout = String::from_utf8_lossy(&out.stdout);
+
+    // hdiutil output format: "diskN  <type>  /Volumes/AppName"
+    // Find the line with /Volumes/ which is the mount point
     let mount_point = stdout
         .lines()
-        .last()
-        .and_then(|l| l.split('\t').last())
-        .map(|s| s.trim().to_string())
-        .ok_or_else(|| anyhow::anyhow!("No mount point found"))?;
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split('\t').collect();
+            parts.last().map(|s| s.trim().to_string())
+        })
+        .find(|s| s.starts_with("/Volumes/"))
+        .ok_or_else(|| anyhow::anyhow!(
+            "No mount point found in hdiutil output:\n{}",
+            stdout
+        ))?;
+
+    info!("DMG mounted at: {}", mount_point);
 
     let app_in_dmg = std::fs::read_dir(&mount_point)?
         .filter_map(|e| e.ok())
