@@ -166,9 +166,10 @@ fn set_windows_transparency(window: &tao::window::Window) {
         DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
     };
     use windows_sys::Win32::UI::Controls::MARGINS;
+    use windows_sys::Win32::Foundation::HWND;
 
     unsafe {
-        let hwnd = window.hwnd() as isize;
+        let hwnd = window.hwnd() as HWND;
 
         let margins = MARGINS {
             cxLeftWidth: -1,
@@ -178,11 +179,10 @@ fn set_windows_transparency(window: &tao::window::Window) {
         };
         DwmExtendFrameIntoClientArea(hwnd, &margins);
 
-        // Rounded corners on Windows 11
         let preference = DWMWCP_ROUND as u32;
         DwmSetWindowAttribute(
             hwnd,
-            DWMWA_WINDOW_CORNER_PREFERENCE,
+            DWMWA_WINDOW_CORNER_PREFERENCE as u32,
             &preference as *const _ as *const std::ffi::c_void,
             std::mem::size_of::<u32>() as u32,
         );
