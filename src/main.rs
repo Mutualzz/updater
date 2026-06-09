@@ -4,6 +4,7 @@ mod ipc;
 mod platform;
 mod splash;
 mod update;
+mod build;
 
 use std::process::Stdio;
 use std::sync::Arc;
@@ -13,7 +14,6 @@ use log::{error, info, warn};
 
 pub use update::UpdateManifest;
 
-/// Messages the bootstrapper sends to the Electron app
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum OutboundMsg {
@@ -24,7 +24,6 @@ pub enum OutboundMsg {
     NoUpdate,
 }
 
-/// Messages the Electron app sends to the bootstrapper
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum InboundMsg {
@@ -32,7 +31,6 @@ pub enum InboundMsg {
     CheckUpdate,
 }
 
-/// Commands from async tasks → splash UI thread
 #[derive(Debug, Clone)]
 pub enum SplashCmd {
     SetStatus(String),
@@ -44,8 +42,6 @@ pub enum SplashCmd {
 fn main() {
     env_logger::init();
 
-    // Test the splash window in isolation without running the full updater flow.
-    // Usage: cargo run -- --splash-test
     if std::env::args().any(|a| a == "--splash-test") {
         let (tx, rx) = std::sync::mpsc::channel::<SplashCmd>();
         std::thread::spawn(move || {
@@ -90,59 +86,78 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
     let (inbound_tx, mut inbound_rx) = tokio::sync::mpsc::channel::<InboundMsg>(8);
     let pending_update: Arc<Mutex<Option<std::path::PathBuf>>> = Arc::new(Mutex::new(None));
 
-    // 1. Check for updates before launching Electron
-    let _ = splash_tx.send(SplashCmd::SetStatus("Checking for updates...".into()));
+    let skip_check = {
+        let marker = platform::just_updated_marker();
+        if let Ok(installed_version) = std::fs::read_to_string(&marker) {
+            let installed = installed_version.trim();
+            let current = env!("CARGO_PKG_VERSION");
+            std::fs::remove_file(&marker).ok();
 
-    match update::check_for_update().await {
-        Ok(Some(manifest)) => {
-            info!("Update available: {}", manifest.version);
-            let version = manifest.version.clone();
-            let tx = splash_tx.clone();
+            if installed == current {
+                info!("Just updated to {} — skipping update check this launch", current);
+                true
+            } else {
+                info!("Stale marker (installed={}, current={}) — doing normal check", installed, current);
+                false
+            }
+        } else {
+            false
+        }
+    };
 
-            match update::download_update(&manifest, move |percent, bps, _transferred, _total| {
-                let _ = tx.send(SplashCmd::SetProgress(percent));
-                let _ = tx.send(SplashCmd::SetStatus(format!(
-                    "Downloading... {:.0}%  ({:.1} MB/s)",
-                    percent,
-                    bps as f64 / 1_048_576.0
-                )));
-            })
-                .await
-            {
-                Ok(path) => {
-                    info!("Update downloaded: {}", path.display());
-                    let _ = splash_tx.send(SplashCmd::SetProgress(100.0));
-                    let _ = splash_tx.send(SplashCmd::SetStatus("Applying update...".into()));
+    if skip_check {
+        let _ = splash_tx.send(SplashCmd::SetStatus("Up to date!".into()));
+    } else {
+        let _ = splash_tx.send(SplashCmd::SetStatus("Checking for updates...".into()));
 
-                    if let Err(e) = platform::apply_update(&path).await {
-                        error!("Failed to apply update: {}", e);
+        match update::check_for_update().await {
+            Ok(Some(manifest)) => {
+                info!("Update available: {}", manifest.version);
+                let version = manifest.version.clone();
+                let tx = splash_tx.clone();
+
+                match update::download_update(&manifest, move |percent, bps, _transferred, _total| {
+                    let _ = tx.send(SplashCmd::SetProgress(percent));
+                    let _ = tx.send(SplashCmd::SetStatus(format!(
+                        "Downloading... {:.0}%  ({:.1} MB/s)",
+                        percent,
+                        bps as f64 / 1_048_576.0
+                    )));
+                })
+                    .await
+                {
+                    Ok(path) => {
+                        info!("Update downloaded: {}", path.display());
+                        let _ = splash_tx.send(SplashCmd::SetProgress(100.0));
+                        let _ = splash_tx.send(SplashCmd::SetStatus("Applying update...".into()));
+
+                        if let Err(e) = platform::apply_update(&path, &version).await {
+                            error!("Failed to apply update: {}", e);
+                            let _ = splash_tx.send(SplashCmd::SetStatus(
+                                format!("Update failed: {}", e)
+                            ));
+                            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                        } else {
+                            return;
+                        }
+                    }
+                    Err(e) => {
+                        error!("Download failed: {}", e);
                         let _ = splash_tx.send(SplashCmd::SetStatus(
-                            format!("Update failed: {}", e)
+                            format!("Download failed: {}", e)
                         ));
                         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                    } else {
-                        return;
                     }
                 }
-                Err(e) => {
-                    error!("Download failed: {}", e);
-                    let _ = splash_tx.send(SplashCmd::SetStatus(
-                        format!("Download failed: {}", e)
-                    ));
-                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                }
             }
-
-            *pending_update.lock().await = None;
-            let _ = outbound_tx.send(OutboundMsg::UpdateAvailable { version });
-        }
-        Ok(None) => {
-            info!("No update available");
-            let _ = splash_tx.send(SplashCmd::SetStatus("Up to date!".into()));
-        }
-        Err(e) => {
-            warn!("Update check failed: {}", e);
-            let _ = splash_tx.send(SplashCmd::SetStatus("Could not check for updates".into()));
+            Ok(None) => {
+                info!("No update available");
+                let _ = splash_tx.send(SplashCmd::SetStatus("Up to date!".into()));
+            }
+            Err(e) => {
+                warn!("Update check failed: {}", e);
+                let _ = splash_tx.send(SplashCmd::SetStatus("Could not check for updates".into()));
+            }
         }
     }
 
@@ -150,7 +165,6 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
     let _ = splash_tx.send(SplashCmd::SetStatus("Launching Mutualzz...".into()));
     let _ = splash_tx.send(SplashCmd::HideProgress);
 
-    // 2. Launch Electron only if not already running
     if platform::is_app_already_running() {
         info!("App already running, skipping launch");
         let _ = splash_tx.send(SplashCmd::Close);
@@ -168,7 +182,6 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
         tokio::time::sleep(std::time::Duration::from_millis(800)).await;
         let _ = splash_tx.send(SplashCmd::Close);
 
-        // 3. Start IPC server
         let ipc_tx = Arc::clone(&outbound_tx);
         tokio::spawn(async move {
             if let Err(e) = ipc::serve(ipc_tx, inbound_tx).await {
@@ -176,7 +189,6 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
             }
         });
 
-        // 4. Periodic background update check every hour
         {
             let tx = Arc::clone(&outbound_tx);
             let pending = Arc::clone(&pending_update);
@@ -191,7 +203,6 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
             });
         }
 
-        // 5. Handle inbound messages from Electron
         while let Some(msg) = inbound_rx.recv().await {
             match msg {
                 InboundMsg::ApplyUpdate => {
@@ -199,7 +210,7 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
                     if let Some(update_path) = path {
                         info!("Apply requested: {}", update_path.display());
                         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-                        if let Err(e) = platform::apply_update(&update_path).await {
+                        if let Err(e) = platform::apply_update(&update_path, "pending").await {
                             error!("Apply failed: {}", e);
                             let _ = outbound_tx.send(OutboundMsg::UpdateError {
                                 message: e.to_string(),

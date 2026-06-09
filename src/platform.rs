@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use log::info;
 
-/// Returns the path to the real Electron binary.
+
 pub fn electron_exe_path() -> PathBuf {
     if let Ok(path) = std::env::var("UPDATER_ELECTRON_PATH") {
         return PathBuf::from(path);
@@ -20,7 +20,7 @@ pub fn electron_exe_path() -> PathBuf {
     return dir.join("mutualzz");
 }
 
-/// Returns the install root of the app bundle.
+
 pub fn install_dir() -> PathBuf {
     let bootstrapper = std::env::current_exe().expect("Cannot resolve bootstrapper path");
     let dir = bootstrapper.parent().expect("No parent dir");
@@ -36,8 +36,12 @@ pub fn install_dir() -> PathBuf {
     return dir.to_path_buf();
 }
 
-/// Check if the Electron app is already running.
-/// Used on Windows to prevent launching a second instance.
+
+pub fn just_updated_marker() -> PathBuf {
+    std::env::temp_dir().join("mutualzz-just-updated")
+}
+
+
 pub fn is_app_already_running() -> bool {
     #[cfg(target_os = "windows")]
     {
@@ -59,7 +63,10 @@ pub fn is_app_already_running() -> bool {
     }
 }
 
-pub async fn apply_update(update_path: &std::path::Path) -> anyhow::Result<()> {
+pub async fn apply_update(
+    update_path: &std::path::Path,
+    version: &str,
+) -> anyhow::Result<()> {
     let install = install_dir();
     info!("Applying {} → {}", update_path.display(), install.display());
 
@@ -84,6 +91,8 @@ pub async fn apply_update(update_path: &std::path::Path) -> anyhow::Result<()> {
         other => return Err(anyhow::anyhow!("Unknown update format: {}", other)),
     }
 
+    std::fs::write(just_updated_marker(), version.as_bytes()).ok();
+
     relaunch_bootstrapper();
 }
 
@@ -93,6 +102,7 @@ fn relaunch_bootstrapper() -> ! {
 
     #[cfg(unix)]
     {
+        std::thread::sleep(std::time::Duration::from_secs(2));
         use std::os::unix::process::CommandExt;
         let err = std::process::Command::new(&exe).exec();
         panic!("Failed to re-exec: {}", err);
@@ -131,7 +141,6 @@ async fn apply_dmg(
         ));
     }
 
-    // Parse plist XML — find <key>mount-point</key> then read the next <string> value
     let mount_point = stdout
         .lines()
         .skip_while(|l| !l.contains("<key>mount-point</key>"))
