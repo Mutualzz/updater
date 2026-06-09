@@ -1,3 +1,5 @@
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 mod ipc;
 mod platform;
 mod splash;
@@ -11,6 +13,7 @@ use log::{error, info, warn};
 
 pub use update::UpdateManifest;
 
+/// Messages the bootstrapper sends to the Electron app
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum OutboundMsg {
@@ -21,6 +24,7 @@ pub enum OutboundMsg {
     NoUpdate,
 }
 
+/// Messages the Electron app sends to the bootstrapper
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum InboundMsg {
@@ -28,6 +32,7 @@ pub enum InboundMsg {
     CheckUpdate,
 }
 
+/// Commands from async tasks → splash UI thread
 #[derive(Debug, Clone)]
 pub enum SplashCmd {
     SetStatus(String),
@@ -39,6 +44,8 @@ pub enum SplashCmd {
 fn main() {
     env_logger::init();
 
+    // Test the splash window in isolation without running the full updater flow.
+    // Usage: cargo run -- --splash-test
     if std::env::args().any(|a| a == "--splash-test") {
         let (tx, rx) = std::sync::mpsc::channel::<SplashCmd>();
         std::thread::spawn(move || {
@@ -66,7 +73,6 @@ fn main() {
     info!("Mutualzz bootstrapper starting");
 
     let (splash_tx, splash_rx) = std::sync::mpsc::channel::<SplashCmd>();
-
     let splash_tx_async = splash_tx.clone();
 
     std::thread::spawn(move || {
@@ -84,30 +90,22 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
     let (inbound_tx, mut inbound_rx) = tokio::sync::mpsc::channel::<InboundMsg>(8);
     let pending_update: Arc<Mutex<Option<std::path::PathBuf>>> = Arc::new(Mutex::new(None));
 
+    // 1. Check for updates before launching Electron
     let _ = splash_tx.send(SplashCmd::SetStatus("Checking for updates...".into()));
 
     match update::check_for_update().await {
         Ok(Some(manifest)) => {
             info!("Update available: {}", manifest.version);
-            let _ = splash_tx.send(SplashCmd::SetStatus(format!(
-                "Downloading update {}...",
-                manifest.version
-            )));
-
             let version = manifest.version.clone();
             let tx = splash_tx.clone();
 
-            match update::download_update(&manifest, move |percent, bps, transferred, total| {
-                let mb_done = transferred as f64 / 1_048_576.0;
-                let mb_total = total as f64 / 1_048_576.0;
+            match update::download_update(&manifest, move |percent, bps, _transferred, _total| {
                 let _ = tx.send(SplashCmd::SetProgress(percent));
                 let _ = tx.send(SplashCmd::SetStatus(format!(
                     "Downloading... {:.0}%  ({:.1} MB/s)",
                     percent,
                     bps as f64 / 1_048_576.0
                 )));
-                let _ = mb_done;
-                let _ = mb_total;
             })
                 .await
             {
@@ -118,7 +116,9 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
 
                     if let Err(e) = platform::apply_update(&path).await {
                         error!("Failed to apply update: {}", e);
-                        let _ = splash_tx.send(SplashCmd::SetStatus(format!("Update failed: {}", e)));
+                        let _ = splash_tx.send(SplashCmd::SetStatus(
+                            format!("Update failed: {}", e)
+                        ));
                         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                     } else {
                         return;
@@ -126,7 +126,9 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
                 }
                 Err(e) => {
                     error!("Download failed: {}", e);
-                    let _ = splash_tx.send(SplashCmd::SetStatus(format!("Download failed: {}", e)));
+                    let _ = splash_tx.send(SplashCmd::SetStatus(
+                        format!("Download failed: {}", e)
+                    ));
                     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                 }
             }
@@ -145,70 +147,81 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
     }
 
     tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-
     let _ = splash_tx.send(SplashCmd::SetStatus("Launching Mutualzz...".into()));
     let _ = splash_tx.send(SplashCmd::HideProgress);
 
-    let electron_path = platform::electron_exe_path();
-    info!("Launching Electron: {}", electron_path.display());
+    // 2. Launch Electron only if not already running
+    if platform::is_app_already_running() {
+        info!("App already running, skipping launch");
+        let _ = splash_tx.send(SplashCmd::Close);
+    } else {
+        let electron_path = platform::electron_exe_path();
+        info!("Launching Electron: {}", electron_path.display());
 
-    let mut child = Command::new(&electron_path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .expect("Failed to launch Electron");
+        let mut child = Command::new(&electron_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .expect("Failed to launch Electron");
 
-    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-    let _ = splash_tx.send(SplashCmd::Close);
+        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+        let _ = splash_tx.send(SplashCmd::Close);
 
-    let ipc_tx = Arc::clone(&outbound_tx);
-    tokio::spawn(async move {
-        if let Err(e) = ipc::serve(ipc_tx, inbound_tx).await {
-            error!("IPC server error: {}", e);
-        }
-    });
-
-    {
-        let tx = Arc::clone(&outbound_tx);
-        let pending = Arc::clone(&pending_update);
+        // 3. Start IPC server
+        let ipc_tx = Arc::clone(&outbound_tx);
         tokio::spawn(async move {
-            let mut interval =
-                tokio::time::interval(std::time::Duration::from_secs(3600));
-            interval.tick().await;
-            loop {
-                interval.tick().await;
-                run_background_check(Arc::clone(&tx), Arc::clone(&pending)).await;
+            if let Err(e) = ipc::serve(ipc_tx, inbound_tx).await {
+                error!("IPC server error: {}", e);
             }
         });
-    }
 
-    while let Some(msg) = inbound_rx.recv().await {
-        match msg {
-            InboundMsg::ApplyUpdate => {
-                let path = pending_update.lock().await.clone();
-                if let Some(update_path) = path {
-                    info!("Apply requested: {}", update_path.display());
-                    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-                    if let Err(e) = platform::apply_update(&update_path).await {
-                        error!("Apply failed: {}", e);
-                        let _ = outbound_tx.send(OutboundMsg::UpdateError {
-                            message: e.to_string(),
-                        });
+        // 4. Periodic background update check every hour
+        {
+            let tx = Arc::clone(&outbound_tx);
+            let pending = Arc::clone(&pending_update);
+            tokio::spawn(async move {
+                let mut interval =
+                    tokio::time::interval(std::time::Duration::from_secs(3600));
+                interval.tick().await;
+                loop {
+                    interval.tick().await;
+                    run_background_check(Arc::clone(&tx), Arc::clone(&pending)).await;
+                }
+            });
+        }
+
+        // 5. Handle inbound messages from Electron
+        while let Some(msg) = inbound_rx.recv().await {
+            match msg {
+                InboundMsg::ApplyUpdate => {
+                    let path = pending_update.lock().await.clone();
+                    if let Some(update_path) = path {
+                        info!("Apply requested: {}", update_path.display());
+                        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                        if let Err(e) = platform::apply_update(&update_path).await {
+                            error!("Apply failed: {}", e);
+                            let _ = outbound_tx.send(OutboundMsg::UpdateError {
+                                message: e.to_string(),
+                            });
+                        }
+                        std::process::exit(0);
+                    } else {
+                        warn!("ApplyUpdate received but no pending update");
                     }
-                    std::process::exit(0);
-                } else {
-                    warn!("ApplyUpdate received but no pending update");
+                }
+                InboundMsg::CheckUpdate => {
+                    run_background_check(
+                        Arc::clone(&outbound_tx),
+                        Arc::clone(&pending_update),
+                    ).await;
                 }
             }
-            InboundMsg::CheckUpdate => {
-                run_background_check(Arc::clone(&outbound_tx), Arc::clone(&pending_update))
-                    .await;
-            }
         }
+
+        let _ = child.wait().await;
     }
 
-    let _ = child.wait().await;
     std::process::exit(0);
 }
 

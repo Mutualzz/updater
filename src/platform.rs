@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use log::info;
 
+/// Returns the path to the real Electron binary.
 pub fn electron_exe_path() -> PathBuf {
     if let Ok(path) = std::env::var("UPDATER_ELECTRON_PATH") {
         return PathBuf::from(path);
@@ -10,7 +11,7 @@ pub fn electron_exe_path() -> PathBuf {
     let dir = bootstrapper.parent().expect("No parent dir");
 
     #[cfg(target_os = "macos")]
-    return dir.join("MutualzzApp");
+    return dir.join("MutualzzHelper");
 
     #[cfg(target_os = "windows")]
     return dir.join("mutualzz.exe");
@@ -19,6 +20,7 @@ pub fn electron_exe_path() -> PathBuf {
     return dir.join("mutualzz");
 }
 
+/// Returns the install root of the app bundle.
 pub fn install_dir() -> PathBuf {
     let bootstrapper = std::env::current_exe().expect("Cannot resolve bootstrapper path");
     let dir = bootstrapper.parent().expect("No parent dir");
@@ -32,6 +34,26 @@ pub fn install_dir() -> PathBuf {
 
     #[cfg(not(target_os = "macos"))]
     return dir.to_path_buf();
+}
+
+/// Check if the Electron app is already running.
+/// Used on Windows to prevent launching a second instance.
+pub fn is_app_already_running() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        let output = Command::new("tasklist")
+            .args(["/FI", "IMAGENAME eq mutualzz.exe", "/NH", "/FO", "CSV"])
+            .output()
+            .unwrap_or_default();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        stdout.to_lowercase().contains("mutualzz.exe")
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        false
+    }
 }
 
 pub async fn apply_update(update_path: &std::path::Path) -> anyhow::Result<()> {
@@ -81,35 +103,46 @@ fn relaunch_bootstrapper() -> ! {
 }
 
 #[cfg(target_os = "macos")]
-async fn apply_dmg(dmg_path: &std::path::Path, install_dir: &std::path::Path) -> anyhow::Result<()> {
+async fn apply_dmg(
+    dmg_path: &std::path::Path,
+    install_dir: &std::path::Path,
+) -> anyhow::Result<()> {
     use tokio::process::Command;
 
+    // Use -plist output for reliable structured parsing
+    // -noverify skips checksum verification (we already verified)
     let out = Command::new("hdiutil")
-        .args(["attach", "-nobrowse", "-quiet", "-noverify"])
+        .args(["attach", "-nobrowse", "-noverify", "-plist"])
         .arg(dmg_path)
         .output()
         .await?;
 
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    info!("hdiutil stdout: {}", stdout);
+
     if !out.status.success() {
         return Err(anyhow::anyhow!(
-            "hdiutil failed: {}",
-            String::from_utf8_lossy(&out.stderr)
+            "hdiutil attach failed:\nstdout: {}\nstderr: {}",
+            stdout,
+            stderr
         ));
     }
 
-    let stdout = String::from_utf8_lossy(&out.stdout);
-
-    // hdiutil output format: "diskN  <type>  /Volumes/AppName"
-    // Find the line with /Volumes/ which is the mount point
+    // Parse plist XML — find <key>mount-point</key> then read the next <string> value
     let mount_point = stdout
         .lines()
-        .filter_map(|line| {
-            let parts: Vec<&str> = line.split('\t').collect();
-            parts.last().map(|s| s.trim().to_string())
+        .skip_while(|l| !l.contains("<key>mount-point</key>"))
+        .nth(1)
+        .and_then(|l| {
+            let s = l.trim();
+            let s = s.strip_prefix("<string>")?;
+            let s = s.strip_suffix("</string>")?;
+            Some(s.to_string())
         })
-        .find(|s| s.starts_with("/Volumes/"))
         .ok_or_else(|| anyhow::anyhow!(
-            "No mount point found in hdiutil output:\n{}",
+            "No mount-point found in hdiutil plist output:\n{}",
             stdout
         ))?;
 
@@ -117,13 +150,17 @@ async fn apply_dmg(dmg_path: &std::path::Path, install_dir: &std::path::Path) ->
 
     let app_in_dmg = std::fs::read_dir(&mount_point)?
         .filter_map(|e| e.ok())
-        .find(|e| e.path().extension().and_then(|x| x.to_str()) == Some("app"))
+        .find(|e| {
+            e.path().extension().and_then(|x| x.to_str()) == Some("app")
+        })
         .map(|e| e.path())
-        .ok_or_else(|| anyhow::anyhow!("No .app in DMG"))?;
+        .ok_or_else(|| anyhow::anyhow!("No .app found in DMG at: {}", mount_point))?;
+
+    info!("Found app: {}", app_in_dmg.display());
 
     let apps_dir = install_dir
         .parent()
-        .ok_or_else(|| anyhow::anyhow!("No parent dir for .app"))?;
+        .ok_or_else(|| anyhow::anyhow!("No parent dir for install_dir"))?;
 
     let rsync = Command::new("rsync")
         .args(["-a", "--delete"])
@@ -142,7 +179,7 @@ async fn apply_dmg(dmg_path: &std::path::Path, install_dir: &std::path::Path) ->
         .await;
 
     tokio::fs::remove_file(dmg_path).await.ok();
-    info!("macOS update applied");
+    info!("macOS update applied successfully");
     Ok(())
 }
 
@@ -150,7 +187,11 @@ async fn apply_dmg(dmg_path: &std::path::Path, install_dir: &std::path::Path) ->
 async fn apply_nsis(installer_path: &std::path::Path) -> anyhow::Result<()> {
     use tokio::process::Command;
 
-    let status = Command::new(installer_path).arg("/S").status().await?;
+    let status = Command::new(installer_path)
+        .arg("/S")
+        .status()
+        .await?;
+
     if !status.success() {
         return Err(anyhow::anyhow!("NSIS installer failed"));
     }

@@ -1,6 +1,6 @@
 [package]
 name = "updater"
-version = "6.4.2"
+version = "6.4.1"
 edition = "2021"
 
 [[bin]]
@@ -27,13 +27,16 @@ tokio-util = { version = "0.7", features = ["io"] }
 tao = "0.30"
 wry = "0.46"
 base64 = "0.22"
-anyhow = "1.0.102"
+anyhow = "1"
+
+[build-dependencies]
+winres = "0.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc = "0.2"
 
 [profile.release]
 opt-level = "z"
 lto = true
 codegen-units = 1
 strip = true
-
-[target.'cfg(target_os = "macos")'.dependencies]
-objc = "0.2"
