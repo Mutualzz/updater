@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use log::info;
 
-
+/// Returns the path to the real Electron binary.
 pub fn electron_exe_path() -> PathBuf {
     if let Ok(path) = std::env::var("UPDATER_ELECTRON_PATH") {
         return PathBuf::from(path);
@@ -11,7 +11,7 @@ pub fn electron_exe_path() -> PathBuf {
     let dir = bootstrapper.parent().expect("No parent dir");
 
     #[cfg(target_os = "macos")]
-    return dir.join("MutualzzHelper");
+    return dir.join("MutualzzApp");
 
     #[cfg(target_os = "windows")]
     return dir.join("mutualzz.exe");
@@ -20,7 +20,7 @@ pub fn electron_exe_path() -> PathBuf {
     return dir.join("mutualzz");
 }
 
-
+/// Returns the install root of the app bundle.
 pub fn install_dir() -> PathBuf {
     let bootstrapper = std::env::current_exe().expect("Cannot resolve bootstrapper path");
     let dir = bootstrapper.parent().expect("No parent dir");
@@ -36,12 +36,12 @@ pub fn install_dir() -> PathBuf {
     return dir.to_path_buf();
 }
 
-
+/// Path to the marker file written after a successful update.
 pub fn just_updated_marker() -> PathBuf {
     std::env::temp_dir().join("mutualzz-just-updated")
 }
 
-
+/// Check if the Electron app is already running.
 pub fn is_app_already_running() -> bool {
     #[cfg(target_os = "windows")]
     {
