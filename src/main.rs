@@ -38,14 +38,15 @@ pub enum SplashCmd {
     Close,
 }
 
-fn main() { 
+fn main() {
+    // Write logs to /tmp/mutualzz-updater.log so they're visible
+    // even when the app is launched from Finder (not terminal)
     let log_path = std::env::temp_dir().join("mutualzz-updater.log");
     let log_file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&log_path)
         .unwrap_or_else(|_| {
-            // Fallback to stderr if file can't be opened
             panic!("Failed to open log file: {}", log_path.display())
         });
     env_logger::Builder::new()
@@ -96,7 +97,9 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
 
     let (inbound_tx, mut inbound_rx) = tokio::sync::mpsc::channel::<InboundMsg>(8);
     let pending_update: Arc<Mutex<Option<std::path::PathBuf>>> = Arc::new(Mutex::new(None));
-    
+
+    // Check if we just applied an update by reading the marker file.
+    // Only skip the update check if it matches our current baked-in version.
     let skip_check = {
         let marker = platform::just_updated_marker();
         if let Ok(installed_version) = std::fs::read_to_string(&marker) {
@@ -193,13 +196,19 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
         tokio::time::sleep(std::time::Duration::from_millis(800)).await;
         let _ = splash_tx.send(SplashCmd::Close);
 
+        // Clone inbound_tx before passing to IPC server so the channel
+        // stays open even if ipc::serve fails — without this, when the
+        // IPC server errors the channel closes, the while loop exits,
+        // and the updater process dies leaving Electron as an orphan
+        let ipc_inbound_tx = inbound_tx.clone();
         let ipc_tx = Arc::clone(&outbound_tx);
         tokio::spawn(async move {
-            if let Err(e) = ipc::serve(ipc_tx, inbound_tx).await {
+            if let Err(e) = ipc::serve(ipc_tx, ipc_inbound_tx).await {
                 error!("IPC server error: {}", e);
             }
         });
 
+        // Periodic background update check every hour
         {
             let tx = Arc::clone(&outbound_tx);
             let pending = Arc::clone(&pending_update);
@@ -214,6 +223,10 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
             });
         }
 
+        // Handle messages from Electron via IPC.
+        // inbound_tx clone above keeps this channel open even if IPC fails,
+        // so the loop only exits if we explicitly drop inbound_tx (never).
+        // This keeps the updater process alive as long as Electron runs.
         while let Some(msg) = inbound_rx.recv().await {
             match msg {
                 InboundMsg::ApplyUpdate => {
@@ -241,6 +254,7 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
             }
         }
 
+        // Fallback — wait for Electron to exit
         let _ = child.wait().await;
     }
 
