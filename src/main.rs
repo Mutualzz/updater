@@ -39,8 +39,6 @@ pub enum SplashCmd {
 }
 
 fn main() {
-    // Write logs to /tmp/mutualzz-updater.log so they're visible
-    // even when the app is launched from Finder (not terminal)
     let log_path = std::env::temp_dir().join("mutualzz-updater.log");
     let log_file = std::fs::OpenOptions::new()
         .create(true)
@@ -196,10 +194,6 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
         tokio::time::sleep(std::time::Duration::from_millis(800)).await;
         let _ = splash_tx.send(SplashCmd::Close);
 
-        // Clone inbound_tx before passing to IPC server so the channel
-        // stays open even if ipc::serve fails — without this, when the
-        // IPC server errors the channel closes, the while loop exits,
-        // and the updater process dies leaving Electron as an orphan
         let ipc_inbound_tx = inbound_tx.clone();
         let ipc_tx = Arc::clone(&outbound_tx);
         tokio::spawn(async move {
@@ -207,8 +201,7 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
                 error!("IPC server error: {}", e);
             }
         });
-
-        // Periodic background update check every hour
+        
         {
             let tx = Arc::clone(&outbound_tx);
             let pending = Arc::clone(&pending_update);
@@ -223,10 +216,6 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
             });
         }
 
-        // Handle messages from Electron via IPC.
-        // inbound_tx clone above keeps this channel open even if IPC fails,
-        // so the loop only exits if we explicitly drop inbound_tx (never).
-        // This keeps the updater process alive as long as Electron runs.
         while let Some(msg) = inbound_rx.recv().await {
             match msg {
                 InboundMsg::ApplyUpdate => {
