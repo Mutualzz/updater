@@ -37,7 +37,7 @@ pub fn run(rx: Receiver<SplashCmd>) {
         .with_inner_size(LogicalSize::new(300u32, 340u32))
         .with_resizable(false)
         .with_decorations(false)
-        .with_transparent(true)
+        .with_transparent(cfg!(not(target_os = "windows"))) // transparent only on macOS/Linux
         .with_always_on_top(true)
         .build(&event_loop)
         .expect("Failed to create splash window");
@@ -58,18 +58,22 @@ pub fn run(rx: Receiver<SplashCmd>) {
         set_window_transparent(&window);
     }
 
-    #[cfg(target_os = "windows")]
-    set_windows_transparency(&window);
-
     use base64::Engine;
     let logo_b64 = base64::engine::general_purpose::STANDARD.encode(LOGO_PNG);
     let logo_data_url = format!("data:image/png;base64,{}", logo_b64);
     let html = SPLASH_HTML.replace("__LOGO_DATA_URL__", &logo_data_url);
 
+    // On Windows use solid background — transparent windows are unreliable
+    // On macOS/Linux use transparent so CSS border-radius shows through
+    #[cfg(target_os = "windows")]
+    let bg_color = (36u8, 25u8, 39u8, 255u8);
+    #[cfg(not(target_os = "windows"))]
+    let bg_color = (0u8, 0u8, 0u8, 0u8);
+
     let webview = WebViewBuilder::new()
         .with_html(html)
-        .with_transparent(true)
-        .with_background_color((36, 25, 39, 255))
+        .with_transparent(cfg!(not(target_os = "windows")))
+        .with_background_color(bg_color)
         .with_devtools(false)
         .build(&window)
         .expect("Failed to create WebView");
@@ -155,36 +159,5 @@ fn set_window_transparent(window: &tao::window::Window) {
             msg_send![class!(NSColor), clearColor];
         let _: () = msg_send![ns_window, setBackgroundColor: clear];
         let _: () = msg_send![ns_window, _setCornerRadius: 16.0_f64];
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn set_windows_transparency(window: &tao::window::Window) {
-    use tao::platform::windows::WindowExtWindows;
-    use windows_sys::Win32::Graphics::Dwm::{
-        DwmExtendFrameIntoClientArea, DwmSetWindowAttribute,
-        DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
-    };
-    use windows_sys::Win32::UI::Controls::MARGINS;
-    use windows_sys::Win32::Foundation::HWND;
-
-    unsafe {
-        let hwnd = window.hwnd() as HWND;
-
-        let margins = MARGINS {
-            cxLeftWidth: -1,
-            cxRightWidth: -1,
-            cyTopHeight: -1,
-            cyBottomHeight: -1,
-        };
-        DwmExtendFrameIntoClientArea(hwnd, &margins);
-
-        let preference = DWMWCP_ROUND as u32;
-        DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_WINDOW_CORNER_PREFERENCE as u32,
-            &preference as *const _ as *const std::ffi::c_void,
-            std::mem::size_of::<u32>() as u32,
-        );
     }
 }

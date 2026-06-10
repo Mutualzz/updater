@@ -35,13 +35,6 @@ winres = "0.1"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2"
 
-[target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.61.2", features = [
-    "Win32_Foundation",
-    "Win32_Graphics_Dwm",
-    "Win32_UI_Controls",
-] }
-
 [profile.release]
 opt-level = "z"
 lto = true
