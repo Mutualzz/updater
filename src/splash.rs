@@ -1,6 +1,6 @@
 use std::sync::mpsc::Receiver;
 use tao::{
-    dpi::LogicalSize,
+    dpi::PhysicalSize,
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop, EventLoopBuilder},
     window::WindowBuilder,
@@ -34,10 +34,11 @@ pub fn run(rx: Receiver<SplashCmd>) {
 
     let window = WindowBuilder::new()
         .with_title("Mutualzz")
-        .with_inner_size(LogicalSize::new(300u32, 340u32))
+        // PhysicalSize ensures exact pixel size regardless of DPI scaling
+        .with_inner_size(PhysicalSize::new(300u32, 340u32))
         .with_resizable(false)
         .with_decorations(false)
-        .with_transparent(cfg!(not(target_os = "windows"))) // transparent only on macOS/Linux
+        .with_transparent(cfg!(not(target_os = "windows")))
         .with_always_on_top(true)
         .build(&event_loop)
         .expect("Failed to create splash window");
@@ -63,8 +64,6 @@ pub fn run(rx: Receiver<SplashCmd>) {
     let logo_data_url = format!("data:image/png;base64,{}", logo_b64);
     let html = SPLASH_HTML.replace("__LOGO_DATA_URL__", &logo_data_url);
 
-    // On Windows use solid background — transparent windows are unreliable
-    // On macOS/Linux use transparent so CSS border-radius shows through
     #[cfg(target_os = "windows")]
     let bg_color = (36u8, 25u8, 39u8, 255u8);
     #[cfg(not(target_os = "windows"))]
