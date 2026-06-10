@@ -38,8 +38,20 @@ pub enum SplashCmd {
     Close,
 }
 
-fn main() {
-    env_logger::init();
+fn main() { 
+    let log_path = std::env::temp_dir().join("mutualzz-updater.log");
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .unwrap_or_else(|_| {
+            // Fallback to stderr if file can't be opened
+            panic!("Failed to open log file: {}", log_path.display())
+        });
+    env_logger::Builder::new()
+        .filter_level(log::LevelFilter::Info)
+        .target(env_logger::Target::Pipe(Box::new(log_file)))
+        .init();
 
     if std::env::args().any(|a| a == "--splash-test") {
         let (tx, rx) = std::sync::mpsc::channel::<SplashCmd>();
@@ -84,7 +96,7 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
 
     let (inbound_tx, mut inbound_rx) = tokio::sync::mpsc::channel::<InboundMsg>(8);
     let pending_update: Arc<Mutex<Option<std::path::PathBuf>>> = Arc::new(Mutex::new(None));
-
+    
     let skip_check = {
         let marker = platform::just_updated_marker();
         if let Ok(installed_version) = std::fs::read_to_string(&marker) {
