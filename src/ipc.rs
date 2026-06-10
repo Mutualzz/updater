@@ -4,39 +4,32 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use log::{error, info, warn};
 use interprocess::local_socket::{
     tokio::{prelude::*, Stream},
-    GenericNamespaced, ListenerOptions,
+    GenericFilePath, ListenerOptions,
 };
 
 use crate::{InboundMsg, OutboundMsg};
 
-pub const SOCKET_NAME: &str = "mutualzz-updater";
+#[cfg(unix)]
+pub const SOCKET_PATH: &str = "/tmp/mutualzz-updater.sock";
+
+#[cfg(windows)]
+pub const SOCKET_PATH: &str = r"\\.\pipe\mutualzz-updater";
 
 pub async fn serve(
     tx: Arc<broadcast::Sender<OutboundMsg>>,
     inbound_tx: mpsc::Sender<InboundMsg>,
 ) -> anyhow::Result<()> {
-    let name = SOCKET_NAME.to_ns_name::<GenericNamespaced>()?;
+    #[cfg(unix)]
+    if std::path::Path::new(SOCKET_PATH).exists() {
+        std::fs::remove_file(SOCKET_PATH).ok();
+        info!("Removed stale socket: {}", SOCKET_PATH);
+    }
 
-    let listener = match ListenerOptions::new().name(name.clone()).create_tokio() {
-        Ok(l) => l,
-        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
-            info!("Socket in use, removing stale socket and retrying");
-            #[cfg(unix)]
-            {
-                let socket_path = std::path::PathBuf::from("/tmp")
-                    .join(format!("{}.sock", SOCKET_NAME));
-                if socket_path.exists() {
-                    std::fs::remove_file(&socket_path).ok();
-                    info!("Removed stale socket: {}", socket_path.display());
-                }
-            }
-            // Retry once after cleanup
-            ListenerOptions::new().name(name).create_tokio()?
-        }
-        Err(e) => return Err(e.into()),
-    };
+    let name = SOCKET_PATH.to_fs_name::<GenericFilePath>()?;
+    let opts = ListenerOptions::new().name(name);
+    let listener = opts.create_tokio()?;
 
-    info!("IPC listening on: {}", SOCKET_NAME);
+    info!("IPC listening on: {}", SOCKET_PATH);
 
     loop {
         match listener.accept().await {
