@@ -16,6 +16,16 @@ pub async fn serve(
     inbound_tx: mpsc::Sender<InboundMsg>,
 ) -> anyhow::Result<()> {
     let name = SOCKET_NAME.to_ns_name::<GenericNamespaced>()?;
+
+    #[cfg(unix)]
+    {
+        let socket_path = format!("/tmp/{}.sock", SOCKET_NAME);
+        if std::path::Path::new(&socket_path).exists() {
+            std::fs::remove_file(&socket_path).ok();
+            info!("Removed stale socket: {}", socket_path);
+        }
+    }
+
     let opts = ListenerOptions::new().name(name);
     let listener = opts.create_tokio()?;
 
