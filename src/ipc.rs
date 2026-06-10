@@ -17,17 +17,24 @@ pub async fn serve(
 ) -> anyhow::Result<()> {
     let name = SOCKET_NAME.to_ns_name::<GenericNamespaced>()?;
 
-    #[cfg(unix)]
-    {
-        let socket_path = format!("/tmp/{}.sock", SOCKET_NAME);
-        if std::path::Path::new(&socket_path).exists() {
-            std::fs::remove_file(&socket_path).ok();
-            info!("Removed stale socket: {}", socket_path);
+    let listener = match ListenerOptions::new().name(name.clone()).create_tokio() {
+        Ok(l) => l,
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            info!("Socket in use, removing stale socket and retrying");
+            #[cfg(unix)]
+            {
+                let socket_path = std::path::PathBuf::from("/tmp")
+                    .join(format!("{}.sock", SOCKET_NAME));
+                if socket_path.exists() {
+                    std::fs::remove_file(&socket_path).ok();
+                    info!("Removed stale socket: {}", socket_path.display());
+                }
+            }
+            // Retry once after cleanup
+            ListenerOptions::new().name(name).create_tokio()?
         }
-    }
-
-    let opts = ListenerOptions::new().name(name);
-    let listener = opts.create_tokio()?;
+        Err(e) => return Err(e.into()),
+    };
 
     info!("IPC listening on: {}", SOCKET_NAME);
 

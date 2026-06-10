@@ -1,6 +1,6 @@
 use std::sync::mpsc::Receiver;
 use tao::{
-    dpi::PhysicalSize,
+    dpi::{LogicalSize, PhysicalSize, Size},
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop, EventLoopBuilder},
     window::WindowBuilder,
@@ -32,10 +32,16 @@ pub fn run(rx: Receiver<SplashCmd>) {
         }
     });
 
+    // Windows uses PhysicalSize to prevent DPI scaling issues
+    // macOS/Linux use LogicalSize since they handle DPI internally
+    #[cfg(target_os = "windows")]
+    let window_size = Size::Physical(PhysicalSize::new(300u32, 340u32));
+    #[cfg(not(target_os = "windows"))]
+    let window_size = Size::Logical(LogicalSize::new(300.0f64, 340.0f64));
+
     let window = WindowBuilder::new()
         .with_title("Mutualzz")
-        // PhysicalSize ensures exact pixel size regardless of DPI scaling
-        .with_inner_size(PhysicalSize::new(300u32, 340u32))
+        .with_inner_size(window_size)
         .with_resizable(false)
         .with_decorations(false)
         .with_transparent(cfg!(not(target_os = "windows")))
