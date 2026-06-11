@@ -15,7 +15,6 @@ pub enum SplashCmd {
 }
 
 fn main() {
-    // Write logs to file so they're visible even when launched from Finder
     let log_path = std::env::temp_dir().join("mutualzz-updater.log");
     let log_file = std::fs::OpenOptions::new()
         .create(true)
@@ -28,7 +27,6 @@ fn main() {
         .target(env_logger::Target::Pipe(Box::new(log_file)))
         .init();
 
-    // --splash-test mode for UI development
     if std::env::args().any(|a| a == "--splash-test") {
         let (tx, rx) = std::sync::mpsc::channel::<SplashCmd>();
         std::thread::spawn(move || {
@@ -50,14 +48,20 @@ fn main() {
         return;
     }
 
-    // --apply <path> mode - called by Electron when user clicks install
+    // --apply <path> [--version <version>] mode
     let args: Vec<String> = std::env::args().collect();
     if let Some(pos) = args.iter().position(|a| a == "--apply") {
         if let Some(path) = args.get(pos + 1) {
             let path = std::path::PathBuf::from(path);
+            let version = args.iter()
+                .position(|a| a == "--version")
+                .and_then(|p| args.get(p + 1))
+                .map(|s| s.clone())
+                .unwrap_or_else(|| "pending".to_string());
+
             let (splash_tx, splash_rx) = std::sync::mpsc::channel::<SplashCmd>();
 
-            info!("Apply mode: {}", path.display());
+            info!("Apply mode: {} (version: {})", path.display(), version);
 
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
@@ -65,7 +69,7 @@ fn main() {
                     let _ = splash_tx.send(SplashCmd::SetStatus("Applying update...".into()));
                     let _ = splash_tx.send(SplashCmd::SetProgress(100.0));
 
-                    match platform::apply_update(&path, "pending").await {
+                    match platform::apply_update(&path, &version).await {
                         Ok(_) => {
                             // apply_update calls relaunch — never reached
                         }
@@ -86,7 +90,6 @@ fn main() {
         }
     }
 
-    // Normal launch mode
     info!("Mutualzz bootstrapper starting");
 
     let (splash_tx, splash_rx) = std::sync::mpsc::channel::<SplashCmd>();
@@ -101,7 +104,6 @@ fn main() {
 }
 
 async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
-    // Check marker file - skip update check if we just applied an update
     let skip_check = {
         let marker = platform::just_updated_marker();
         if let Ok(installed_version) = std::fs::read_to_string(&marker) {
@@ -154,7 +156,6 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
                             ));
                             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                         }
-                        // apply_update calls relaunch on success — never reached
                     }
                     Err(e) => {
                         error!("Download failed: {}", e);
