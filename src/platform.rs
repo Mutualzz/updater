@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use log::info;
 
-/// Returns the path to the real Electron binary.
+
 pub fn electron_exe_path() -> PathBuf {
     if let Ok(path) = std::env::var("UPDATER_ELECTRON_PATH") {
         return PathBuf::from(path);
@@ -20,7 +20,7 @@ pub fn electron_exe_path() -> PathBuf {
     return dir.join("mutualzz");
 }
 
-/// Returns the install root of the app bundle.
+
 pub fn install_dir() -> PathBuf {
     let bootstrapper = std::env::current_exe().expect("Cannot resolve bootstrapper path");
     let dir = bootstrapper.parent().expect("No parent dir");
@@ -36,30 +36,29 @@ pub fn install_dir() -> PathBuf {
     return dir.to_path_buf();
 }
 
-/// Path to the marker file written after a successful update.
+
 pub fn just_updated_marker() -> PathBuf {
     std::env::temp_dir().join("mutualzz-just-updated")
 }
 
-/// Check if the Electron app is already running.
-pub fn is_app_already_running() -> bool {
-    #[cfg(target_os = "windows")]
+
+pub fn exec_into_electron() -> ! {
+    let electron_path = electron_exe_path();
+    info!("Launching Electron: {}", electron_path.display());
+
+    #[cfg(unix)]
     {
-        use std::process::Command;
-        let Ok(output) = Command::new("tasklist")
-            .args(["/FI", "IMAGENAME eq mutualzz.exe", "/NH", "/FO", "CSV"])
-            .output()
-        else {
-            return false;
-        };
-        String::from_utf8_lossy(&output.stdout)
-            .to_lowercase()
-            .contains("mutualzz.exe")
+        use std::os::unix::process::CommandExt;
+        let err = std::process::Command::new(&electron_path).exec();
+        panic!("exec failed: {}", err);
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(windows)]
     {
-        false
+        std::process::Command::new(&electron_path)
+            .spawn()
+            .expect("Failed to launch Electron");
+        std::process::exit(0);
     }
 }
 
@@ -98,7 +97,7 @@ pub async fn apply_update(
 
 fn relaunch_bootstrapper() -> ! {
     let exe = std::env::current_exe().expect("Cannot resolve bootstrapper path");
-    info!("Relaunching: {}", exe.display());
+    info!("Relaunching bootstrapper: {}", exe.display());
 
     #[cfg(unix)]
     {
@@ -136,8 +135,7 @@ async fn apply_dmg(
     if !out.status.success() {
         return Err(anyhow::anyhow!(
             "hdiutil attach failed:\nstdout: {}\nstderr: {}",
-            stdout,
-            stderr
+            stdout, stderr
         ));
     }
 
@@ -160,9 +158,7 @@ async fn apply_dmg(
 
     let app_in_dmg = std::fs::read_dir(&mount_point)?
         .filter_map(|e| e.ok())
-        .find(|e| {
-            e.path().extension().and_then(|x| x.to_str()) == Some("app")
-        })
+        .find(|e| e.path().extension().and_then(|x| x.to_str()) == Some("app"))
         .map(|e| e.path())
         .ok_or_else(|| anyhow::anyhow!("No .app found in DMG at: {}", mount_point))?;
 
