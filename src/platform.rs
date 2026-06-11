@@ -20,7 +20,6 @@ pub fn electron_exe_path() -> PathBuf {
     return dir.join("mutualzz");
 }
 
-
 pub fn install_dir() -> PathBuf {
     let bootstrapper = std::env::current_exe().expect("Cannot resolve bootstrapper path");
     let dir = bootstrapper.parent().expect("No parent dir");
@@ -40,7 +39,6 @@ pub fn install_dir() -> PathBuf {
 pub fn just_updated_marker() -> PathBuf {
     std::env::temp_dir().join("mutualzz-just-updated")
 }
-
 
 pub fn exec_into_electron() -> ! {
     let electron_path = electron_exe_path();
@@ -90,8 +88,10 @@ pub async fn apply_update(
         other => return Err(anyhow::anyhow!("Unknown update format: {}", other)),
     }
 
+    // Write marker so next launch skips update check
     std::fs::write(just_updated_marker(), version.as_bytes()).ok();
 
+    // Re-exec the bootstrapper so it picks up the new binary
     relaunch_bootstrapper();
 }
 
@@ -169,14 +169,15 @@ async fn apply_dmg(
         .ok_or_else(|| anyhow::anyhow!("No parent dir for install_dir"))?;
 
     let rsync = Command::new("rsync")
-        .args(["-a", "--delete"])
+        .args(["-a", "--delete", "--no-times"])
         .arg(&app_in_dmg)
         .arg(apps_dir)
         .status()
         .await?;
 
-    if !rsync.success() {
-        return Err(anyhow::anyhow!("rsync failed"));
+    let rsync_ok = rsync.success() || rsync.code() == Some(23);
+    if !rsync_ok {
+        return Err(anyhow::anyhow!("rsync failed with exit code: {:?}", rsync.code()));
     }
 
     let _ = Command::new("hdiutil")
