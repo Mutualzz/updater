@@ -37,6 +37,36 @@ impl UpdateManifest {
     }
 }
 
+/// Returns the path to the persistent version file.
+/// macOS:   ~/Library/Application Support/Mutualzz/version.txt
+/// Windows: %APPDATA%\Mutualzz\version.txt
+/// Linux:   ~/.local/share/Mutualzz/version.txt
+pub fn version_file_path() -> PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
+        .join("Mutualzz")
+        .join("version.txt")
+}
+
+/// Reads the installed app version from the version file.
+/// Returns "0.0.0" if the file doesn't exist (first install).
+pub fn get_installed_version() -> String {
+    std::fs::read_to_string(version_file_path())
+        .unwrap_or_else(|_| "0.0.0".to_string())
+        .trim()
+        .to_string()
+}
+
+/// Writes the installed app version to the version file.
+pub fn set_installed_version(version: &str) {
+    let path = version_file_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    std::fs::write(&path, version.as_bytes()).ok();
+    info!("Wrote installed version: {}", version);
+}
+
 pub async fn check_for_update() -> anyhow::Result<Option<UpdateManifest>> {
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(15))
@@ -52,9 +82,13 @@ pub async fn check_for_update() -> anyhow::Result<Option<UpdateManifest>> {
         .await?;
 
     let remote = Version::parse(&manifest.version)?;
-    let current = Version::parse(env!("CARGO_PKG_VERSION"))?;
 
-    debug!("Remote: {}, current: {}", remote, current);
+    // Use version file instead of CARGO_PKG_VERSION so the updater
+    // binary version doesn't need to match the app version
+    let installed = get_installed_version();
+    let current = Version::parse(&installed)?;
+
+    debug!("Remote: {}, installed: {}", remote, current);
 
     if remote > current {
         Ok(Some(manifest))

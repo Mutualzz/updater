@@ -20,6 +20,7 @@ pub fn electron_exe_path() -> PathBuf {
     return dir.join("mutualzz");
 }
 
+
 pub fn install_dir() -> PathBuf {
     let bootstrapper = std::env::current_exe().expect("Cannot resolve bootstrapper path");
     let dir = bootstrapper.parent().expect("No parent dir");
@@ -40,6 +41,9 @@ pub fn just_updated_marker() -> PathBuf {
     std::env::temp_dir().join("mutualzz-just-updated")
 }
 
+/// Replace the current process with the Electron binary.
+/// On Unix this uses exec() — the updater process becomes Electron (same PID).
+/// On Windows we spawn + exit since exec() doesn't exist.
 pub fn exec_into_electron() -> ! {
     let electron_path = electron_exe_path();
     info!("Launching Electron: {}", electron_path.display());
@@ -87,6 +91,9 @@ pub async fn apply_update(
 
         other => return Err(anyhow::anyhow!("Unknown update format: {}", other)),
     }
+
+    // Write the new version to the persistent version file
+    crate::update::set_installed_version(version);
 
     // Write marker so next launch skips update check
     std::fs::write(just_updated_marker(), version.as_bytes()).ok();
@@ -174,6 +181,7 @@ async fn apply_dmg(
         .arg(apps_dir)
         .status()
         .await?;
+
 
     let rsync_ok = rsync.success() || rsync.code() == Some(23);
     if !rsync_ok {

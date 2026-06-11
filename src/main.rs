@@ -106,16 +106,16 @@ fn main() {
 async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
     let skip_check = {
         let marker = platform::just_updated_marker();
-        if let Ok(installed_version) = std::fs::read_to_string(&marker) {
-            let installed = installed_version.trim();
-            let current = env!("CARGO_PKG_VERSION");
+        if let Ok(marker_version) = std::fs::read_to_string(&marker) {
+            let marker_ver = marker_version.trim();
+            let installed = update::get_installed_version();
             std::fs::remove_file(&marker).ok();
 
-            if installed == current {
-                info!("Just updated to {} — skipping check", current);
+            if marker_ver == installed {
+                info!("Just updated to {} — skipping check", installed);
                 true
             } else {
-                info!("Stale marker (installed={}, current={}) — checking", installed, current);
+                info!("Stale marker (marker={}, installed={}) — checking", marker_ver, installed);
                 false
             }
         } else {
