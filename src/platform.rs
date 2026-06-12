@@ -42,7 +42,7 @@ pub fn just_updated_marker() -> PathBuf {
 }
 
 /// Replace the current process with the Electron binary.
-/// On Unix this uses exec() — the updater process becomes Electron (same PID).
+/// On Unix this uses exec() - the updater process becomes Electron (same PID).
 /// On Windows we spawn + exit since exec() doesn't exist.
 pub fn exec_into_electron() -> ! {
     let electron_path = electron_exe_path();
