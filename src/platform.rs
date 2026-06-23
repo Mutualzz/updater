@@ -41,9 +41,7 @@ pub fn just_updated_marker() -> PathBuf {
     std::env::temp_dir().join("mutualzz-just-updated")
 }
 
-/// Replace the current process with the Electron binary.
-/// On Unix this uses exec() — the updater process becomes Electron (same PID).
-/// On Windows we spawn + exit since exec() doesn't exist.
+
 pub fn exec_into_electron() -> ! {
     let electron_path = electron_exe_path();
     info!("Launching Electron: {}", electron_path.display());
@@ -182,7 +180,6 @@ async fn apply_dmg(
         .status()
         .await?;
 
-
     let rsync_ok = rsync.success() || rsync.code() == Some(23);
     if !rsync_ok {
         return Err(anyhow::anyhow!("rsync failed with exit code: {:?}", rsync.code()));
@@ -207,8 +204,19 @@ async fn apply_nsis(installer_path: &std::path::Path) -> anyhow::Result<()> {
         .status()
         .await?;
 
-    if !status.success() {
-        return Err(anyhow::anyhow!("NSIS installer failed"));
+
+    match status.code() {
+        Some(0) => {
+            info!("NSIS installer succeeded");
+        }
+        Some(2) => {
+            log::warn!("NSIS exit code 2 (old uninstaller not found) — files written, continuing");
+        }
+        other => {
+            return Err(anyhow::anyhow!(
+                "NSIS installer failed with exit code: {:?}", other
+            ));
+        }
     }
 
     tokio::fs::remove_file(installer_path).await.ok();

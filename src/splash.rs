@@ -1,6 +1,6 @@
 use std::sync::mpsc::Receiver;
 use tao::{
-    dpi::{LogicalSize, PhysicalSize, Size},
+    dpi::{LogicalSize, Size},
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop, EventLoopBuilder},
     window::WindowBuilder,
@@ -19,6 +19,9 @@ enum UserEvent {
 }
 
 pub fn run(rx: Receiver<SplashCmd>) {
+    #[cfg(target_os = "windows")]
+    set_dpi_aware();
+
     let event_loop: EventLoop<UserEvent> = EventLoopBuilder::with_user_event().build();
     let proxy = event_loop.create_proxy();
 
@@ -32,11 +35,6 @@ pub fn run(rx: Receiver<SplashCmd>) {
         }
     });
 
-    // Windows uses PhysicalSize to prevent DPI scaling issues
-    // macOS/Linux use LogicalSize since they handle DPI internally
-    #[cfg(target_os = "windows")]
-    let window_size = Size::Physical(PhysicalSize::new(300u32, 340u32));
-    #[cfg(not(target_os = "windows"))]
     let window_size = Size::Logical(LogicalSize::new(300.0f64, 340.0f64));
 
     let window = WindowBuilder::new()
@@ -130,6 +128,17 @@ fn handle_cmd(
             info!("Closing splash window");
             *control_flow = ControlFlow::Exit;
         }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn set_dpi_aware() {
+    use windows::Win32::UI::HiDpi::{
+        SetProcessDpiAwarenessContext,
+        DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    };
+    unsafe {
+        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
 }
 
