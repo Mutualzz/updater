@@ -17,7 +17,7 @@ pub fn electron_exe_path() -> PathBuf {
     return dir.join("mutualzz.exe");
 
     #[cfg(target_os = "linux")]
-    return dir.join("mutualzz");
+    return dir.join("mutualzz-bin");
 }
 
 
@@ -232,7 +232,8 @@ async fn apply_appimage(
     use std::os::unix::fs::PermissionsExt;
     use tokio::fs;
 
-    let dest = install_dir.join("mutualzz");
+
+    let dest = install_dir.join("mutualzz-bin");
     fs::copy(appimage_path, &dest).await?;
 
     let mut perms = fs::metadata(&dest).await?.permissions();
