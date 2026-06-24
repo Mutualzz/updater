@@ -56,10 +56,12 @@ pub fn exec_into_electron() -> ! {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        const DETACHED_PROCESS:        u32 = 0x00000008;
+        const DETACHED_PROCESS: u32 = 0x00000008;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
 
+        let dir = electron_path.parent().unwrap();
         std::process::Command::new(&electron_path)
+            .current_dir(dir)
             .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
             .spawn()
             .expect("Failed to launch Electron");
