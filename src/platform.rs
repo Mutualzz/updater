@@ -41,6 +41,7 @@ pub fn just_updated_marker() -> PathBuf {
     std::env::temp_dir().join("mutualzz-just-updated")
 }
 
+/// Replace the current process with the Electron binary.
 pub fn exec_into_electron() -> ! {
     let electron_path = electron_exe_path();
     info!("Launching Electron: {}", electron_path.display());
@@ -54,7 +55,12 @@ pub fn exec_into_electron() -> ! {
 
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS:        u32 = 0x00000008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+
         std::process::Command::new(&electron_path)
+            .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
             .spawn()
             .expect("Failed to launch Electron");
         std::process::exit(0);
