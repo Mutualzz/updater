@@ -41,8 +41,6 @@ pub fn just_updated_marker() -> PathBuf {
     std::env::temp_dir().join("mutualzz-just-updated")
 }
 
-
-
 pub fn exec_into_electron() -> ! {
     let electron_path = electron_exe_path();
     info!("Launching Electron: {}", electron_path.display());
@@ -75,14 +73,6 @@ pub async fn apply_update(
         .and_then(|e| e.to_str())
         .unwrap_or("");
 
-
-    #[cfg(target_os = "windows")]
-    {
-        crate::update::set_installed_version(version);
-        std::fs::write(just_updated_marker(), version.as_bytes()).ok();
-        info!("Wrote version and marker before NSIS run");
-    }
-
     match ext {
         #[cfg(target_os = "macos")]
         "dmg" => apply_dmg(update_path, &install).await?,
@@ -99,11 +89,8 @@ pub async fn apply_update(
         other => return Err(anyhow::anyhow!("Unknown update format: {}", other)),
     }
 
-    #[cfg(not(target_os = "windows"))]
-    {
-        crate::update::set_installed_version(version);
-        std::fs::write(just_updated_marker(), version.as_bytes()).ok();
-    }
+    crate::update::set_installed_version(version);
+    std::fs::write(just_updated_marker(), version.as_bytes()).ok();
 
     relaunch_bootstrapper();
 }
@@ -230,26 +217,24 @@ async fn apply_dmg(
 async fn apply_nsis(installer_path: &std::path::Path) -> anyhow::Result<()> {
     use tokio::process::Command;
 
+    let current = std::env::current_exe()?;
+    let renamed = current.with_extension("exe.old");
+    std::fs::rename(&current, &renamed).ok();
+    info!("Renamed running exe to avoid NSIS lock: {}", renamed.display());
+
     let status = Command::new(installer_path)
         .arg("/S")
         .status()
         .await?;
 
     match status.code() {
-        Some(0) => {
-            info!("NSIS installer succeeded");
-        }
-        Some(2) => {
-            log::warn!("NSIS exit code 2 (old uninstaller not found) — files written, continuing");
-        }
-        other => {
-            return Err(anyhow::anyhow!(
-                "NSIS installer failed with exit code: {:?}", other
-            ));
-        }
+        Some(0) => info!("NSIS installer succeeded"),
+        Some(2) => log::warn!("NSIS exit code 2 — continuing"),
+        other => return Err(anyhow::anyhow!("NSIS failed with exit code: {:?}", other)),
     }
 
     tokio::fs::remove_file(installer_path).await.ok();
+    tokio::fs::remove_file(&renamed).await.ok();
     info!("Windows update applied");
     Ok(())
 }
