@@ -41,7 +41,6 @@ pub fn just_updated_marker() -> PathBuf {
     std::env::temp_dir().join("mutualzz-just-updated")
 }
 
-
 pub fn exec_into_electron() -> ! {
     let electron_path = electron_exe_path();
     info!("Launching Electron: {}", electron_path.display());
@@ -74,6 +73,13 @@ pub async fn apply_update(
         .and_then(|e| e.to_str())
         .unwrap_or("");
 
+    #[cfg(target_os = "windows")]
+    {
+        crate::update::set_installed_version(version);
+        std::fs::write(just_updated_marker(), version.as_bytes()).ok();
+        info!("Wrote version and marker before NSIS run");
+    }
+
     match ext {
         #[cfg(target_os = "macos")]
         "dmg" => apply_dmg(update_path, &install).await?,
@@ -90,13 +96,12 @@ pub async fn apply_update(
         other => return Err(anyhow::anyhow!("Unknown update format: {}", other)),
     }
 
-    // Write the new version to the persistent version file
-    crate::update::set_installed_version(version);
+    #[cfg(not(target_os = "windows"))]
+    {
+        crate::update::set_installed_version(version);
+        std::fs::write(just_updated_marker(), version.as_bytes()).ok();
+    }
 
-    // Write marker so next launch skips update check
-    std::fs::write(just_updated_marker(), version.as_bytes()).ok();
-
-    // Re-exec the bootstrapper so it picks up the new binary
     relaunch_bootstrapper();
 }
 
@@ -114,6 +119,16 @@ fn relaunch_bootstrapper() -> ! {
 
     #[cfg(windows)]
     {
+        let timeout = std::time::Duration::from_secs(10);
+        let start = std::time::Instant::now();
+        while !exe.exists() && start.elapsed() < timeout {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        if !exe.exists() {
+            log::error!("Bootstrapper not found after 10s: {}", exe.display());
+            std::process::exit(1);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
         std::process::Command::new(&exe).spawn().expect("Relaunch failed");
         std::process::exit(0);
     }
@@ -204,7 +219,6 @@ async fn apply_nsis(installer_path: &std::path::Path) -> anyhow::Result<()> {
         .status()
         .await?;
 
-
     match status.code() {
         Some(0) => {
             info!("NSIS installer succeeded");
@@ -231,7 +245,6 @@ async fn apply_appimage(
 ) -> anyhow::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     use tokio::fs;
-
 
     let dest = install_dir.join("mutualzz-bin");
     fs::copy(appimage_path, &dest).await?;
