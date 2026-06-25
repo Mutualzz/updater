@@ -58,6 +58,80 @@ pub fn exec_into_electron() -> ! {
 
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
+        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x01000000;
+        const CREATE_NEW_PROCESS_GROUP:  u32 = 0x00000200;
+
+        let dir = electron_path.parent().expect("No parent dir for Electron");
+
+        std::process::Command::new(&electron_path)
+            .current_dir(dir)
+            .creation_flags(CREATE_BREAKAWAY_FROM_JOB | CREATE_NEW_PROCESS_GROUP)
+            .spawn()
+            .expect("Failed to launch Electron");
+        std::process::exit(0);
+    }
+}
+
+
+pub async fn apply_update(
+    update_path: &std::path::Path,
+    version: &str,
+) -> anyhow::Result<()> {
+    let install = install_dir();
+    info!("Applying {} → {}", update_path.display(), install.display());
+
+    let ext = update_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+
+    #[cfg(target_os = "windows")]
+    {
+        crate::update::set_installed_version(version);
+        std::fs::write(just_updated_marker(), version.as_bytes()).ok();
+        info!("Wrote version and marker before NSIS");
+    }
+
+    match ext {
+        #[cfg(target_os = "macos")]
+        "dmg" => apply_dmg(update_path, &install).await?,
+
+        #[cfg(target_os = "windows")]
+        "exe" => apply_nsis(update_path).await?,
+
+        #[cfg(target_os = "linux")]
+        "AppImage" => apply_appimage(update_path, &install).await?,
+
+        #[cfg(target_os = "linux")]
+        "deb" => apply_deb(update_path).await?,
+
+        other => return Err(anyhow::anyhow!("Unknown update format: {}", other)),
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        crate::update::set_installed_version(version);
+        std::fs::write(just_updated_marker(), version.as_bytes()).ok();
+    }
+
+    relaunch_bootstrapper();
+}
+
+
+fn relaunch_bootstrapper() -> ! {
+    #[cfg(unix)]
+    {
+        let exe = std::env::current_exe().expect("Cannot resolve bootstrapper path");
+        info!("Relaunching bootstrapper: {}", exe.display());
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        use std::os::unix::process::CommandExt;
+        let err = std::process::Command::new(&exe).exec();
+        panic!("Failed to re-exec: {}", err);
+    }
+
+    #[cfg(windows)]
+    {
         let exe = install_dir().join("updater.exe");
         info!("Relaunching bootstrapper: {}", exe.display());
 
@@ -68,6 +142,11 @@ pub fn exec_into_electron() -> ! {
                 if meta.len() > 0 { break; }
             }
             std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+
+        if !exe.exists() {
+            log::error!("Bootstrapper not found after 30s: {}", exe.display());
+            std::process::exit(1);
         }
 
         std::thread::sleep(std::time::Duration::from_secs(2));
@@ -86,85 +165,6 @@ pub fn exec_into_electron() -> ! {
     }
 }
 
-pub async fn apply_update(
-    update_path: &std::path::Path,
-    version: &str,
-) -> anyhow::Result<()> {
-    let install = install_dir();
-    info!("Applying {} → {}", update_path.display(), install.display());
-
-    let ext = update_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
-
-    match ext {
-        #[cfg(target_os = "macos")]
-        "dmg" => apply_dmg(update_path, &install).await?,
-
-        #[cfg(target_os = "windows")]
-        "exe" => apply_nsis(update_path).await?,
-
-        #[cfg(target_os = "linux")]
-        "AppImage" => apply_appimage(update_path, &install).await?,
-
-        #[cfg(target_os = "linux")]
-        "deb" => apply_deb(update_path).await?,
-
-        other => return Err(anyhow::anyhow!("Unknown update format: {}", other)),
-    }
-
-    crate::update::set_installed_version(version);
-    std::fs::write(just_updated_marker(), version.as_bytes()).ok();
-
-    relaunch_bootstrapper();
-}
-
-fn relaunch_bootstrapper() -> ! {
-    #[cfg(unix)]
-    {
-        let exe = std::env::current_exe().expect("Cannot resolve bootstrapper path");
-        info!("Relaunching bootstrapper: {}", exe.display());
-        std::thread::sleep(std::time::Duration::from_secs(2));
-        use std::os::unix::process::CommandExt;
-        let err = std::process::Command::new(&exe).exec();
-        panic!("Failed to re-exec: {}", err);
-    }
-
-    #[cfg(windows)]
-    {
-        let exe = install_dir().join("updater.exe");
-        info!("Relaunching bootstrapper: {}", exe.display());
-        let timeout = std::time::Duration::from_secs(30);
-        let start = std::time::Instant::now();
-        while start.elapsed() < timeout {
-            if let Ok(meta) = std::fs::metadata(&exe) {
-                if meta.len() > 0 {
-                    break;
-                }
-            }
-            std::thread::sleep(std::time::Duration::from_millis(300));
-        }
-
-        if !exe.exists() {
-            log::error!("Bootstrapper not found after 30s: {}", exe.display());
-            std::process::exit(1);
-        }
-
-
-        std::thread::sleep(std::time::Duration::from_secs(2));
-
-        info!("Spawning new bootstrapper");
-        std::process::Command::new(&exe)
-            .spawn()
-            .expect("Relaunch failed");
-
-
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(60));
-        }
-    }
-}
 
 #[cfg(target_os = "macos")]
 async fn apply_dmg(
@@ -181,8 +181,6 @@ async fn apply_dmg(
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
-
-    info!("hdiutil stdout: {}", stdout);
 
     if !out.status.success() {
         return Err(anyhow::anyhow!(
@@ -242,6 +240,7 @@ async fn apply_dmg(
     Ok(())
 }
 
+
 #[cfg(target_os = "windows")]
 async fn apply_nsis(installer_path: &std::path::Path) -> anyhow::Result<()> {
     use tokio::process::Command;
@@ -268,6 +267,7 @@ async fn apply_nsis(installer_path: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+
 #[cfg(target_os = "linux")]
 async fn apply_appimage(
     appimage_path: &std::path::Path,
@@ -287,6 +287,7 @@ async fn apply_appimage(
     info!("Linux AppImage applied");
     Ok(())
 }
+
 
 #[cfg(target_os = "linux")]
 async fn apply_deb(deb_path: &std::path::Path) -> anyhow::Result<()> {
