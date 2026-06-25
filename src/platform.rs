@@ -56,10 +56,12 @@ pub fn exec_into_electron() -> ! {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        const DETACHED_PROCESS: u32 = 0x00000008;
+        const DETACHED_PROCESS:         u32 = 0x00000008;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
 
-        let dir = electron_path.parent().unwrap();
+        // Run from Electron's own directory so it can find resources/app.asar
+        let dir = electron_path.parent().expect("No parent dir for Electron");
+
         std::process::Command::new(&electron_path)
             .current_dir(dir)
             .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
@@ -135,6 +137,7 @@ fn relaunch_bootstrapper() -> ! {
             std::process::exit(1);
         }
 
+        // Extra buffer to let NSIS fully release file handles
         std::thread::sleep(std::time::Duration::from_secs(2));
 
         info!("Spawning new bootstrapper");
