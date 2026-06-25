@@ -55,17 +55,30 @@ pub fn exec_into_electron() -> ! {
 
     #[cfg(windows)]
     {
+        let exe = install_dir().join("updater.exe");
+        info!("Relaunching bootstrapper: {}", exe.display());
+
+        let timeout = std::time::Duration::from_secs(30);
+        let start = std::time::Instant::now();
+        while start.elapsed() < timeout {
+            if let Ok(meta) = std::fs::metadata(&exe) {
+                if meta.len() > 0 { break; }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+
+        std::thread::sleep(std::time::Duration::from_secs(2));
+
         use std::os::windows::process::CommandExt;
         const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x01000000;
         const CREATE_NEW_PROCESS_GROUP:  u32 = 0x00000200;
 
-        let dir = electron_path.parent().expect("No parent dir for Electron");
-
-        std::process::Command::new(&electron_path)
-            .current_dir(dir)
+        info!("Spawning new bootstrapper");
+        std::process::Command::new(&exe)
             .creation_flags(CREATE_BREAKAWAY_FROM_JOB | CREATE_NEW_PROCESS_GROUP)
             .spawn()
-            .expect("Failed to launch Electron");
+            .expect("Relaunch failed");
+
         std::process::exit(0);
     }
 }
@@ -229,7 +242,6 @@ async fn apply_dmg(
 #[cfg(target_os = "windows")]
 async fn apply_nsis(installer_path: &std::path::Path) -> anyhow::Result<()> {
     use tokio::process::Command;
-
 
     let current = std::env::current_exe()?;
     let renamed = current.with_extension("exe.old");
