@@ -182,6 +182,6 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
     let _ = splash_tx.send(SplashCmd::HideProgress);
     tokio::time::sleep(std::time::Duration::from_millis(400)).await;
     let _ = splash_tx.send(SplashCmd::Close);
-
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     platform::exec_into_electron();
 }
