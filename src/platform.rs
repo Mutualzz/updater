@@ -61,49 +61,11 @@ pub fn exec_into_electron() -> ! {
 
         let dir = electron_path.parent().expect("No parent dir for Electron");
 
-        // Write directly to log file — bypass env_logger entirely
-        let log_path = std::env::temp_dir().join("mutualzz-updater.log");
-        let _ = std::fs::OpenOptions::new()
-            .append(true)
-            .open(&log_path)
-            .map(|mut f| {
-                use std::io::Write;
-                let _ = writeln!(f, "DEBUG: about to spawn {:?}", electron_path);
-            });
-
-        match std::process::Command::new(&electron_path)
+        std::process::Command::new(&electron_path)
             .current_dir(dir)
             .creation_flags(CREATE_BREAKAWAY_FROM_JOB | CREATE_NEW_PROCESS_GROUP)
             .spawn()
-        {
-            Ok(mut child) => {
-                let pid = child.id();
-                let _ = std::fs::OpenOptions::new()
-                    .append(true)
-                    .open(&log_path)
-                    .map(|mut f| {
-                        use std::io::Write;
-                        let _ = writeln!(f, "DEBUG: spawned PID {}", pid);
-                    });
-                let status = child.wait();
-                let _ = std::fs::OpenOptions::new()
-                    .append(true)
-                    .open(&log_path)
-                    .map(|mut f| {
-                        use std::io::Write;
-                        let _ = writeln!(f, "DEBUG: electron exited {:?}", status);
-                    });
-            }
-            Err(e) => {
-                let _ = std::fs::OpenOptions::new()
-                    .append(true)
-                    .open(&log_path)
-                    .map(|mut f| {
-                        use std::io::Write;
-                        let _ = writeln!(f, "DEBUG: spawn failed: {}", e);
-                    });
-            }
-        }
+            .expect("Failed to launch Electron");
         std::process::exit(0);
     }
 }
