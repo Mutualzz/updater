@@ -68,13 +68,13 @@ pub fn exec_into_electron() -> ! {
         {
             Ok(mut child) => {
                 info!("Electron spawned PID: {}", child.id());
-                // Wait for it and log exit code
+                log::logger().flush();
                 match child.wait() {
-                    Ok(status) => log::error!("Electron exited with: {}", status),
-                    Err(e) => log::error!("Wait error: {}", e),
+                    Ok(status) => { log::error!("Electron exited: {}", status); log::logger().flush(); }
+                    Err(e) => { log::error!("Wait error: {}", e); log::logger().flush(); }
                 }
             }
-            Err(e) => log::error!("Spawn failed: {}", e),
+            Err(e) => { log::error!("Spawn failed: {}", e); log::logger().flush(); }
         }
         std::process::exit(0);
     }
