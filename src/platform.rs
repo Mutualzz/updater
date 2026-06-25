@@ -55,12 +55,15 @@ pub fn exec_into_electron() -> ! {
 
     #[cfg(windows)]
     {
-        std::process::Command::new("cmd")
-            .args([
-                "/c", "start", "",
-                electron_path.to_str().unwrap(),
-            ])
-            .current_dir(electron_path.parent().unwrap())
+        use std::os::windows::process::CommandExt;
+        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x01000000;
+        const CREATE_NEW_PROCESS_GROUP:  u32 = 0x00000200;
+
+        let dir = electron_path.parent().expect("No parent dir for Electron");
+
+        std::process::Command::new(&electron_path)
+            .current_dir(dir)
+            .creation_flags(CREATE_BREAKAWAY_FROM_JOB | CREATE_NEW_PROCESS_GROUP)
             .spawn()
             .expect("Failed to launch Electron");
         std::process::exit(0);
@@ -117,6 +120,7 @@ fn relaunch_bootstrapper() -> ! {
         let exe = install_dir().join("updater.exe");
         info!("Relaunching bootstrapper: {}", exe.display());
 
+        // Poll until NSIS finishes writing the new binary — up to 30 seconds.
         let timeout = std::time::Duration::from_secs(30);
         let start = std::time::Instant::now();
         while start.elapsed() < timeout {
