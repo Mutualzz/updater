@@ -55,24 +55,14 @@ pub fn exec_into_electron() -> ! {
 
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
-        const DETACHED_PROCESS:         u32 = 0x00000008;
-        const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
-
-        let dir = electron_path.parent().expect("No parent dir for Electron");
-
-        match std::process::Command::new(&electron_path)
-            .current_dir(dir)
-            .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+        std::process::Command::new("cmd")
+            .args([
+                "/c", "start", "",
+                electron_path.to_str().unwrap(),
+            ])
+            .current_dir(electron_path.parent().unwrap())
             .spawn()
-        {
-            Ok(child) => {
-                info!("Electron spawned with PID: {}", child.id());
-            }
-            Err(e) => {
-                log::error!("Failed to spawn Electron: {}", e);
-            }
-        }
+            .expect("Failed to launch Electron");
         std::process::exit(0);
     }
 }
