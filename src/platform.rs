@@ -41,7 +41,7 @@ pub fn just_updated_marker() -> PathBuf {
     std::env::temp_dir().join("mutualzz-just-updated")
 }
 
-/// Replace the current process with the Electron binary.
+
 pub fn exec_into_electron() -> ! {
     let electron_path = electron_exe_path();
     info!("Launching Electron: {}", electron_path.display());
@@ -119,8 +119,6 @@ fn relaunch_bootstrapper() -> ! {
     {
         let exe = install_dir().join("updater.exe");
         info!("Relaunching bootstrapper: {}", exe.display());
-
-        // Poll until NSIS finishes writing the new binary — up to 30 seconds.
         let timeout = std::time::Duration::from_secs(30);
         let start = std::time::Instant::now();
         while start.elapsed() < timeout {
@@ -137,14 +135,18 @@ fn relaunch_bootstrapper() -> ! {
             std::process::exit(1);
         }
 
-        // Extra buffer to let NSIS fully release file handles
+
         std::thread::sleep(std::time::Duration::from_secs(2));
 
         info!("Spawning new bootstrapper");
         std::process::Command::new(&exe)
             .spawn()
             .expect("Relaunch failed");
-        std::process::exit(0);
+
+
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(60));
+        }
     }
 }
 
@@ -227,6 +229,7 @@ async fn apply_dmg(
 #[cfg(target_os = "windows")]
 async fn apply_nsis(installer_path: &std::path::Path) -> anyhow::Result<()> {
     use tokio::process::Command;
+
 
     let current = std::env::current_exe()?;
     let renamed = current.with_extension("exe.old");
