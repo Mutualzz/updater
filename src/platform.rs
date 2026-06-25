@@ -38,7 +38,10 @@ pub fn install_dir() -> PathBuf {
 
 
 pub fn just_updated_marker() -> PathBuf {
-    std::env::temp_dir().join("mutualzz-just-updated")
+    dirs::data_local_dir()
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
+        .join("Mutualzz")
+        .join("just-updated")
 }
 
 
