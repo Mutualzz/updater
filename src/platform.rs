@@ -59,14 +59,20 @@ pub fn exec_into_electron() -> ! {
         const DETACHED_PROCESS:         u32 = 0x00000008;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
 
-        // Run from Electron's own directory so it can find resources/app.asar
         let dir = electron_path.parent().expect("No parent dir for Electron");
 
-        std::process::Command::new(&electron_path)
+        match std::process::Command::new(&electron_path)
             .current_dir(dir)
             .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
             .spawn()
-            .expect("Failed to launch Electron");
+        {
+            Ok(child) => {
+                info!("Electron spawned with PID: {}", child.id());
+            }
+            Err(e) => {
+                log::error!("Failed to spawn Electron: {}", e);
+            }
+        }
         std::process::exit(0);
     }
 }
