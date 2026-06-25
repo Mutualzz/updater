@@ -61,11 +61,21 @@ pub fn exec_into_electron() -> ! {
 
         let dir = electron_path.parent().expect("No parent dir for Electron");
 
-        std::process::Command::new(&electron_path)
+        match std::process::Command::new(&electron_path)
             .current_dir(dir)
             .creation_flags(CREATE_BREAKAWAY_FROM_JOB | CREATE_NEW_PROCESS_GROUP)
             .spawn()
-            .expect("Failed to launch Electron");
+        {
+            Ok(mut child) => {
+                info!("Electron spawned PID: {}", child.id());
+                // Wait for it and log exit code
+                match child.wait() {
+                    Ok(status) => log::error!("Electron exited with: {}", status),
+                    Err(e) => log::error!("Wait error: {}", e),
+                }
+            }
+            Err(e) => log::error!("Spawn failed: {}", e),
+        }
         std::process::exit(0);
     }
 }
