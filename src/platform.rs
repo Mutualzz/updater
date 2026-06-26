@@ -74,7 +74,6 @@ pub fn exec_into_electron() -> ! {
 }
 
 
-
 pub async fn apply_update(
     update_path: &std::path::Path,
     version: &str,
@@ -124,7 +123,6 @@ pub async fn apply_update(
     #[allow(unreachable_code)]
     Ok(())
 }
-
 
 #[cfg(windows)]
 fn relaunch_bootstrapper(exe: PathBuf) -> ! {
@@ -186,6 +184,24 @@ fn wait_for_file_ready(path: &std::path::Path, timeout: std::time::Duration) {
         "Timed out waiting for exclusive access to {}, proceeding anyway",
         path.display()
     );
+}
+
+
+#[cfg(windows)]
+fn is_process_running(name: &str) -> bool {
+    let output = std::process::Command::new("tasklist")
+        .args(["/NH", "/FO", "CSV"])
+        .output();
+
+    match output {
+        Ok(o) => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            stdout
+                .lines()
+                .any(|l| l.to_lowercase().contains(&name.to_lowercase()))
+        }
+        Err(_) => false,
+    }
 }
 
 
@@ -270,6 +286,37 @@ async fn apply_nsis(
     new_updater_path: &std::path::Path,
 ) -> anyhow::Result<()> {
     use tokio::process::Command;
+
+    info!("Waiting for mutualzz.exe to exit before running NSIS...");
+    let electron_exe = new_updater_path
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("mutualzz.exe");
+
+    let wait_start = std::time::Instant::now();
+    loop {
+        let still_running = is_process_running("mutualzz.exe");
+        let file_locked = electron_exe.exists() && {
+            use std::os::windows::fs::OpenOptionsExt;
+            !std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .open(&electron_exe)
+                .is_ok()
+        };
+
+        if !still_running && !file_locked {
+            info!("mutualzz.exe is gone, proceeding with NSIS");
+            break;
+        }
+
+        if wait_start.elapsed() > std::time::Duration::from_secs(15) {
+            log::warn!("Timed out waiting for mutualzz.exe to exit, proceeding anyway");
+            break;
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
 
     let current = std::env::current_exe()?;
     let renamed = current.with_extension("exe.old");
