@@ -86,47 +86,47 @@ pub async fn apply_update(
         .and_then(|e| e.to_str())
         .unwrap_or("");
 
-    #[cfg(target_os = "windows")]
-    {
-        crate::update::set_installed_version(version);
-        std::fs::write(just_updated_marker(), version.as_bytes()).ok();
-        info!("Wrote version and marker before NSIS");
-    }
-
     match ext {
         #[cfg(target_os = "macos")]
-        "dmg" => apply_dmg(update_path, &install).await?,
+        "dmg" => {
+            apply_dmg(update_path, &install).await?;
+            crate::update::set_installed_version(version);
+            std::fs::write(just_updated_marker(), version.as_bytes()).ok();
+            relaunch_bootstrapper();
+        }
 
         #[cfg(target_os = "windows")]
         "exe" => {
             let new_updater = install.join("updater.exe");
-            apply_nsis(update_path, &new_updater).await?;
+            apply_nsis(update_path, &new_updater, version).await?;
             relaunch_bootstrapper(new_updater);
         }
 
         #[cfg(target_os = "linux")]
-        "AppImage" => apply_appimage(update_path, &install).await?,
+        "AppImage" => {
+            apply_appimage(update_path, &install).await?;
+            crate::update::set_installed_version(version);
+            std::fs::write(just_updated_marker(), version.as_bytes()).ok();
+            relaunch_bootstrapper();
+        }
 
         #[cfg(target_os = "linux")]
-        "deb" => apply_deb(update_path).await?,
+        "deb" => {
+            apply_deb(update_path).await?;
+            crate::update::set_installed_version(version);
+            std::fs::write(just_updated_marker(), version.as_bytes()).ok();
+            relaunch_bootstrapper();
+        }
 
         other => return Err(anyhow::anyhow!("Unknown update format: {}", other)),
     }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        crate::update::set_installed_version(version);
-        std::fs::write(just_updated_marker(), version.as_bytes()).ok();
-        relaunch_bootstrapper();
-    }
-
-    #[allow(unreachable_code)]
-    Ok(())
 }
+
 
 #[cfg(windows)]
 fn relaunch_bootstrapper(exe: PathBuf) -> ! {
     info!("Relaunching bootstrapper: {}", exe.display());
+
 
     wait_for_file_ready(&exe, std::time::Duration::from_secs(30));
 
@@ -160,6 +160,8 @@ fn relaunch_bootstrapper() -> ! {
     panic!("Failed to re-exec: {}", err);
 }
 
+
+
 #[cfg(windows)]
 fn wait_for_file_ready(path: &std::path::Path, timeout: std::time::Duration) {
     use std::os::windows::fs::OpenOptionsExt;
@@ -173,35 +175,95 @@ fn wait_for_file_ready(path: &std::path::Path, timeout: std::time::Duration) {
             .is_ok();
 
         if ready {
-            info!("File ready (exclusive open succeeded): {}", path.display());
+            info!("File ready: {}", path.display());
             return;
         }
 
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
 
-    log::warn!(
-        "Timed out waiting for exclusive access to {}, proceeding anyway",
-        path.display()
-    );
+    log::warn!("Timed out waiting for {}, proceeding anyway", path.display());
 }
+
 
 
 #[cfg(windows)]
 fn is_process_running(name: &str) -> bool {
-    let output = std::process::Command::new("tasklist")
+    match std::process::Command::new("tasklist")
         .args(["/NH", "/FO", "CSV"])
-        .output();
-
-    match output {
+        .output()
+    {
         Ok(o) => {
             let stdout = String::from_utf8_lossy(&o.stdout);
-            stdout
-                .lines()
-                .any(|l| l.to_lowercase().contains(&name.to_lowercase()))
+            stdout.lines().any(|l| l.to_lowercase().contains(&name.to_lowercase()))
         }
         Err(_) => false,
     }
+}
+
+
+#[cfg(target_os = "windows")]
+async fn apply_nsis(
+    installer_path: &std::path::Path,
+    new_updater_path: &std::path::Path,
+    version: &str,
+) -> anyhow::Result<()> {
+    use tokio::process::Command;
+    use std::os::windows::fs::OpenOptionsExt;
+
+    info!("Waiting for mutualzz.exe to exit...");
+    let electron_exe = new_updater_path
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("mutualzz.exe");
+
+    let wait_start = std::time::Instant::now();
+    loop {
+        let process_gone = !is_process_running("mutualzz.exe");
+        let file_free = !electron_exe.exists() || std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&electron_exe)
+            .is_ok();
+
+        if process_gone && file_free {
+            info!("mutualzz.exe is gone, proceeding with NSIS");
+            break;
+        }
+
+        if wait_start.elapsed() > std::time::Duration::from_secs(15) {
+            log::warn!("Timed out waiting for mutualzz.exe to exit, proceeding anyway");
+            break;
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+
+    crate::update::set_installed_version(version);
+    std::fs::write(crate::platform::just_updated_marker(), version.as_bytes()).ok();
+    info!("Wrote version {} and just-updated marker", version);
+
+    let current = std::env::current_exe()?;
+    let renamed = current.with_extension("exe.old");
+    std::fs::rename(&current, &renamed).ok();
+    info!("Renamed self: {} → {}", current.display(), renamed.display());
+    info!("Expecting new updater at: {}", new_updater_path.display());
+
+    let status = Command::new(installer_path)
+        .arg("/S")
+        .status()
+        .await?;
+
+    match status.code() {
+        Some(0) => info!("NSIS installer succeeded"),
+        Some(2) => log::warn!("NSIS exit code 2 — treating as success"),
+        other   => return Err(anyhow::anyhow!("NSIS failed with exit code: {:?}", other)),
+    }
+
+    tokio::fs::remove_file(installer_path).await.ok();
+    tokio::fs::remove_file(&renamed).await.ok();
+    info!("Windows update applied successfully");
+    Ok(())
 }
 
 
@@ -239,8 +301,7 @@ async fn apply_dmg(
             Some(s.to_string())
         })
         .ok_or_else(|| anyhow::anyhow!(
-            "No mount-point found in hdiutil plist output:\n{}",
-            stdout
+            "No mount-point found in hdiutil output:\n{}", stdout
         ))?;
 
     info!("DMG mounted at: {}", mount_point);
@@ -249,7 +310,7 @@ async fn apply_dmg(
         .filter_map(|e| e.ok())
         .find(|e| e.path().extension().and_then(|x| x.to_str()) == Some("app"))
         .map(|e| e.path())
-        .ok_or_else(|| anyhow::anyhow!("No .app found in DMG at: {}", mount_point))?;
+        .ok_or_else(|| anyhow::anyhow!("No .app in DMG at: {}", mount_point))?;
 
     info!("Found app: {}", app_in_dmg.display());
 
@@ -264,9 +325,9 @@ async fn apply_dmg(
         .status()
         .await?;
 
-    let rsync_ok = rsync.success() || rsync.code() == Some(23);
-    if !rsync_ok {
-        return Err(anyhow::anyhow!("rsync failed with exit code: {:?}", rsync.code()));
+    let ok = rsync.success() || rsync.code() == Some(23);
+    if !ok {
+        return Err(anyhow::anyhow!("rsync failed: {:?}", rsync.code()));
     }
 
     let _ = Command::new("hdiutil")
@@ -275,69 +336,7 @@ async fn apply_dmg(
         .await;
 
     tokio::fs::remove_file(dmg_path).await.ok();
-    info!("macOS update applied successfully");
-    Ok(())
-}
-
-
-#[cfg(target_os = "windows")]
-async fn apply_nsis(
-    installer_path: &std::path::Path,
-    new_updater_path: &std::path::Path,
-) -> anyhow::Result<()> {
-    use tokio::process::Command;
-
-    info!("Waiting for mutualzz.exe to exit before running NSIS...");
-    let electron_exe = new_updater_path
-        .parent()
-        .unwrap_or(std::path::Path::new("."))
-        .join("mutualzz.exe");
-
-    let wait_start = std::time::Instant::now();
-    loop {
-        let still_running = is_process_running("mutualzz.exe");
-        let file_locked = electron_exe.exists() && {
-            use std::os::windows::fs::OpenOptionsExt;
-            !std::fs::OpenOptions::new()
-                .read(true)
-                .share_mode(0)
-                .open(&electron_exe)
-                .is_ok()
-        };
-
-        if !still_running && !file_locked {
-            info!("mutualzz.exe is gone, proceeding with NSIS");
-            break;
-        }
-
-        if wait_start.elapsed() > std::time::Duration::from_secs(15) {
-            log::warn!("Timed out waiting for mutualzz.exe to exit, proceeding anyway");
-            break;
-        }
-
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    }
-
-    let current = std::env::current_exe()?;
-    let renamed = current.with_extension("exe.old");
-    std::fs::rename(&current, &renamed).ok();
-    info!("Renamed running exe to avoid NSIS lock: {}", renamed.display());
-    info!("Expecting new updater at: {}", new_updater_path.display());
-
-    let status = Command::new(installer_path)
-        .arg("/S")
-        .status()
-        .await?;
-
-    match status.code() {
-        Some(0) => info!("NSIS installer succeeded"),
-        Some(2) => log::warn!("NSIS exit code 2 — continuing"),
-        other => return Err(anyhow::anyhow!("NSIS failed with exit code: {:?}", other)),
-    }
-
-    tokio::fs::remove_file(installer_path).await.ok();
-    tokio::fs::remove_file(&renamed).await.ok();
-    info!("Windows update applied");
+    info!("macOS update applied");
     Ok(())
 }
 
@@ -369,7 +368,7 @@ async fn apply_deb(deb_path: &std::path::Path) -> anyhow::Result<()> {
 
     let status = Command::new("dpkg").args(["-i"]).arg(deb_path).status().await?;
     if !status.success() {
-        return Err(anyhow::anyhow!("dpkg failed"));
+        return Err(anyhow::anyhow!("dpkg -i failed"));
     }
 
     tokio::fs::remove_file(deb_path).await.ok();
