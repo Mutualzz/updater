@@ -27,6 +27,7 @@ fn main() {
         .target(env_logger::Target::Pipe(Box::new(log_file)))
         .init();
 
+    // Single-instance guard
     #[cfg(windows)]
     let _lock = {
         use std::os::windows::fs::OpenOptionsExt;
@@ -66,6 +67,7 @@ fn main() {
         return;
     }
 
+    // --apply <installer_path> --version <version>
     let args: Vec<String> = std::env::args().collect();
     if let Some(pos) = args.iter().position(|a| a == "--apply") {
         if let Some(path) = args.get(pos + 1) {
@@ -112,32 +114,87 @@ fn main() {
 
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
-        rt.block_on(async_boot(splash_tx_async));
+        rt.block_on(async_main(splash_tx_async));
     });
 
     splash::run(splash_rx);
 }
 
-async fn async_boot(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
-    let marker = platform::just_updated_marker();
-    if let Ok(marker_version) = std::fs::read_to_string(&marker) {
-        let marker_ver = marker_version.trim();
-        let installed = update::get_installed_version();
-        std::fs::remove_file(&marker).ok();
+async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
+    let skip_check = {
+        let marker = platform::just_updated_marker();
+        if let Ok(marker_version) = std::fs::read_to_string(&marker) {
+            let marker_ver = marker_version.trim();
+            let installed = update::get_installed_version();
+            std::fs::remove_file(&marker).ok();
 
-        if marker_ver == installed {
-            info!("Just updated to {} — launching", installed);
+            if marker_ver == installed {
+                info!("Just updated to {} — skipping check", installed);
+            } else {
+                warn!("Stale marker (marker={}, installed={}) — checking anyway", marker_ver, installed);
+            }
+            marker_ver == installed
         } else {
-            warn!("Stale marker (marker={}, installed={}) — launching anyway", marker_ver, installed);
+            false
         }
+    };
+
+    if skip_check {
         let _ = splash_tx.send(SplashCmd::SetStatus("Up to date!".into()));
     } else {
-        let _ = splash_tx.send(SplashCmd::SetStatus("Launching Mutualzz...".into()));
+        let _ = splash_tx.send(SplashCmd::SetStatus("Checking for updates...".into()));
+
+        match update::check_for_update().await {
+            Ok(Some(manifest)) => {
+                info!("Update available: {}", manifest.version);
+                let version = manifest.version.clone();
+                let tx = splash_tx.clone();
+
+                match update::download_update(&manifest, move |percent, bps, _dl, _total| {
+                    let _ = tx.send(SplashCmd::SetProgress(percent));
+                    let _ = tx.send(SplashCmd::SetStatus(format!(
+                        "Downloading... {:.0}%  ({:.1} MB/s)",
+                        percent,
+                        bps as f64 / 1_048_576.0
+                    )));
+                }).await {
+                    Ok(path) => {
+                        info!("Update downloaded: {}", path.display());
+                        let _ = splash_tx.send(SplashCmd::SetProgress(100.0));
+                        let _ = splash_tx.send(SplashCmd::SetStatus("Applying update...".into()));
+
+                        if let Err(e) = platform::apply_update(&path, &version).await {
+                            error!("Failed to apply update: {}", e);
+                            let _ = splash_tx.send(SplashCmd::SetStatus(
+                                format!("Update failed: {}", e)
+                            ));
+                            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                        }
+                    }
+                    Err(e) => {
+                        error!("Download failed: {}", e);
+                        let _ = splash_tx.send(SplashCmd::SetStatus(
+                            format!("Download failed: {}", e)
+                        ));
+                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                    }
+                }
+            }
+            Ok(None) => {
+                info!("No update available");
+                let _ = splash_tx.send(SplashCmd::SetStatus("Up to date!".into()));
+            }
+            Err(e) => {
+                warn!("Update check failed: {}", e);
+                let _ = splash_tx.send(SplashCmd::SetStatus("Could not check for updates".into()));
+            }
+        }
     }
 
-    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let _ = splash_tx.send(SplashCmd::SetStatus("Launching Mutualzz...".into()));
     let _ = splash_tx.send(SplashCmd::HideProgress);
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     #[cfg(windows)]
     {

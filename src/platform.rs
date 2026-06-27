@@ -98,8 +98,10 @@ pub async fn apply_update(
         #[cfg(target_os = "windows")]
         "exe" => {
             let new_updater = install.join("updater.exe");
+            crate::update::set_installed_version(version);
+            std::fs::write(just_updated_marker(), version.as_bytes()).ok();
             apply_nsis(update_path, &new_updater, version).await?;
-            relaunch_bootstrapper(new_updater);
+            Ok(())
         }
 
         #[cfg(target_os = "linux")]
@@ -122,34 +124,6 @@ pub async fn apply_update(
     }
 }
 
-
-#[cfg(windows)]
-fn relaunch_bootstrapper(exe: PathBuf) -> ! {
-    info!("Relaunching bootstrapper: {}", exe.display());
-
-
-    wait_for_file_ready(&exe, std::time::Duration::from_secs(30));
-
-    if !exe.exists() {
-        log::error!("Bootstrapper not found after wait: {}", exe.display());
-        std::process::exit(1);
-    }
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
-
-    use std::os::windows::process::CommandExt;
-    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x01000000;
-    const CREATE_NEW_PROCESS_GROUP:  u32 = 0x00000200;
-
-    info!("Spawning new bootstrapper: {}", exe.display());
-    std::process::Command::new(&exe)
-        .creation_flags(CREATE_BREAKAWAY_FROM_JOB | CREATE_NEW_PROCESS_GROUP)
-        .spawn()
-        .expect("Relaunch failed");
-
-    std::process::exit(0);
-}
-
 #[cfg(unix)]
 fn relaunch_bootstrapper() -> ! {
     let exe = std::env::current_exe().expect("Cannot resolve bootstrapper path");
@@ -160,110 +134,27 @@ fn relaunch_bootstrapper() -> ! {
     panic!("Failed to re-exec: {}", err);
 }
 
-
-
-#[cfg(windows)]
-fn wait_for_file_ready(path: &std::path::Path, timeout: std::time::Duration) {
-    use std::os::windows::fs::OpenOptionsExt;
-
-    let start = std::time::Instant::now();
-    while start.elapsed() < timeout {
-        let ready = std::fs::OpenOptions::new()
-            .read(true)
-            .share_mode(0)
-            .open(path)
-            .is_ok();
-
-        if ready {
-            info!("File ready: {}", path.display());
-            return;
-        }
-
-        std::thread::sleep(std::time::Duration::from_millis(200));
-    }
-
-    log::warn!("Timed out waiting for {}, proceeding anyway", path.display());
-}
-
-
-
-#[cfg(windows)]
-fn is_process_running(name: &str) -> bool {
-    match std::process::Command::new("tasklist")
-        .args(["/NH", "/FO", "CSV"])
-        .output()
-    {
-        Ok(o) => {
-            let stdout = String::from_utf8_lossy(&o.stdout);
-            stdout.lines().any(|l| l.to_lowercase().contains(&name.to_lowercase()))
-        }
-        Err(_) => false,
-    }
-}
-
-
 #[cfg(target_os = "windows")]
 async fn apply_nsis(
     installer_path: &std::path::Path,
-    new_updater_path: &std::path::Path,
-    version: &str,
+    _new_updater_path: &std::path::Path,
+    _version: &str,
 ) -> anyhow::Result<()> {
-    use tokio::process::Command;
-    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW:         u32 = 0x08000000;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+    const DETACHED_PROCESS:         u32 = 0x00000008;
 
-    info!("Waiting for mutualzz.exe to exit...");
-    let electron_exe = new_updater_path
-        .parent()
-        .unwrap_or(std::path::Path::new("."))
-        .join("mutualzz.exe");
-
-    let wait_start = std::time::Instant::now();
-    loop {
-        let process_gone = !is_process_running("mutualzz.exe");
-        let file_free = !electron_exe.exists() || std::fs::OpenOptions::new()
-            .read(true)
-            .share_mode(0)
-            .open(&electron_exe)
-            .is_ok();
-
-        if process_gone && file_free {
-            info!("mutualzz.exe is gone, proceeding with NSIS");
-            break;
-        }
-
-        if wait_start.elapsed() > std::time::Duration::from_secs(15) {
-            log::warn!("Timed out waiting for mutualzz.exe to exit, proceeding anyway");
-            break;
-        }
-
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    }
-
-    crate::update::set_installed_version(version);
-    std::fs::write(crate::platform::just_updated_marker(), version.as_bytes()).ok();
-    info!("Wrote version {} and just-updated marker", version);
-
-    let current = std::env::current_exe()?;
-    let renamed = current.with_extension("exe.old");
-    std::fs::rename(&current, &renamed).ok();
-    info!("Renamed self: {} → {}", current.display(), renamed.display());
-    info!("Expecting new updater at: {}", new_updater_path.display());
-
-    let status = Command::new(installer_path)
+    std::process::Command::new(installer_path)
         .arg("/S")
-        .status()
-        .await?;
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS)
+        .spawn()?;
 
-    match status.code() {
-        Some(0) => info!("NSIS installer succeeded"),
-        Some(2) => log::warn!("NSIS exit code 2 — treating as success"),
-        other   => return Err(anyhow::anyhow!("NSIS failed with exit code: {:?}", other)),
-    }
-
-    tokio::fs::remove_file(installer_path).await.ok();
-    tokio::fs::remove_file(&renamed).await.ok();
-    info!("Windows update applied successfully");
-    Ok(())
+    info!("NSIS launched detached, exiting");
+    std::process::exit(0);
 }
 
 
