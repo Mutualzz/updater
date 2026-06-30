@@ -257,20 +257,23 @@ async fn apply_appimage(
 ) -> anyhow::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     use tokio::fs;
-    
+
     let dest = if let Ok(current_appimage) = std::env::var("APPIMAGE") {
         PathBuf::from(current_appimage)
     } else {
         install_dir.join("mutualzz-bin")
     };
 
-    fs::copy(appimage_path, &dest).await?;
+    let tmp = dest.with_extension("update.AppImage");
+    fs::copy(appimage_path, &tmp).await?;
 
-    let mut perms = fs::metadata(&dest).await?.permissions();
+    let mut perms = fs::metadata(&tmp).await?.permissions();
     perms.set_mode(0o755);
-    fs::set_permissions(&dest, perms).await?;
-    fs::remove_file(appimage_path).await.ok();
+    fs::set_permissions(&tmp, perms).await?;
 
+    fs::rename(&tmp, &dest).await?;
+
+    fs::remove_file(appimage_path).await.ok();
     info!("Linux AppImage applied to {}", dest.display());
     Ok(())
 }
