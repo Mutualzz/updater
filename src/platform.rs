@@ -17,7 +17,7 @@ pub fn electron_exe_path() -> PathBuf {
     return dir.join("mutualzz.exe");
 
     #[cfg(target_os = "linux")]
-    return dir.join("mutualzz-bin");
+    return install_dir().join("mutualzz-bin");
 }
 
 
@@ -32,7 +32,18 @@ pub fn install_dir() -> PathBuf {
         .expect("Cannot resolve .app root")
         .to_path_buf();
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(appimage_path) = std::env::var("APPIMAGE") {
+            let p = PathBuf::from(appimage_path);
+            if let Some(parent) = p.parent() {
+                return parent.to_path_buf();
+            }
+        }
+        return dir.to_path_buf();
+    }
+
+    #[cfg(target_os = "windows")]
     return dir.to_path_buf();
 }
 
@@ -126,7 +137,14 @@ pub async fn apply_update(
 
 #[cfg(unix)]
 fn relaunch_bootstrapper() -> ! {
+    #[cfg(target_os = "linux")]
+    let exe = std::env::var("APPIMAGE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| std::env::current_exe().expect("Cannot resolve bootstrapper path"));
+
+    #[cfg(not(target_os = "linux"))]
     let exe = std::env::current_exe().expect("Cannot resolve bootstrapper path");
+
     info!("Relaunching bootstrapper: {}", exe.display());
     std::thread::sleep(std::time::Duration::from_secs(2));
     use std::os::unix::process::CommandExt;
@@ -239,8 +257,13 @@ async fn apply_appimage(
 ) -> anyhow::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     use tokio::fs;
+    
+    let dest = if let Ok(current_appimage) = std::env::var("APPIMAGE") {
+        PathBuf::from(current_appimage)
+    } else {
+        install_dir.join("mutualzz-bin")
+    };
 
-    let dest = install_dir.join("mutualzz-bin");
     fs::copy(appimage_path, &dest).await?;
 
     let mut perms = fs::metadata(&dest).await?.permissions();
@@ -248,7 +271,7 @@ async fn apply_appimage(
     fs::set_permissions(&dest, perms).await?;
     fs::remove_file(appimage_path).await.ok();
 
-    info!("Linux AppImage applied");
+    info!("Linux AppImage applied to {}", dest.display());
     Ok(())
 }
 
