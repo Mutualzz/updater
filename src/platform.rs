@@ -1,6 +1,5 @@
-use std::path::PathBuf;
 use log::info;
-
+use std::path::PathBuf;
 
 pub fn electron_exe_path() -> PathBuf {
     if let Ok(path) = std::env::var("UPDATER_ELECTRON_PATH") {
@@ -19,7 +18,6 @@ pub fn electron_exe_path() -> PathBuf {
     #[cfg(target_os = "linux")]
     return install_dir().join("mutualzz-bin");
 }
-
 
 pub fn install_dir() -> PathBuf {
     let bootstrapper = std::env::current_exe().expect("Cannot resolve bootstrapper path");
@@ -47,14 +45,12 @@ pub fn install_dir() -> PathBuf {
     return dir.to_path_buf();
 }
 
-
 pub fn just_updated_marker() -> PathBuf {
     dirs::data_local_dir()
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
         .join("Mutualzz")
         .join("just-updated")
 }
-
 
 pub fn exec_into_electron() -> ! {
     let electron_path = electron_exe_path();
@@ -71,7 +67,7 @@ pub fn exec_into_electron() -> ! {
     {
         use std::os::windows::process::CommandExt;
         const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x01000000;
-        const CREATE_NEW_PROCESS_GROUP:  u32 = 0x00000200;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
 
         let dir = electron_path.parent().expect("No parent dir for Electron");
 
@@ -84,10 +80,10 @@ pub fn exec_into_electron() -> ! {
     }
 }
 
-
 pub async fn apply_update(
     update_path: &std::path::Path,
     version: &str,
+    electron_version: Option<&str>,
 ) -> anyhow::Result<()> {
     let install = install_dir();
     info!("Applying {} → {}", update_path.display(), install.display());
@@ -110,6 +106,9 @@ pub async fn apply_update(
         "exe" => {
             let new_updater = install.join("updater.exe");
             crate::update::set_installed_version(version);
+            if let Some(ev) = electron_version {
+                crate::update::set_installed_electron_version(ev);
+            }
             std::fs::write(just_updated_marker(), version.as_bytes()).ok();
             apply_nsis(update_path, &new_updater, version).await?;
             Ok(())
@@ -159,9 +158,9 @@ async fn apply_nsis(
     _version: &str,
 ) -> anyhow::Result<()> {
     use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW:         u32 = 0x08000000;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
-    const DETACHED_PROCESS:         u32 = 0x00000008;
+    const DETACHED_PROCESS: u32 = 0x00000008;
 
     std::process::Command::new(installer_path)
         .arg("/S")
@@ -175,6 +174,33 @@ async fn apply_nsis(
     std::process::exit(0);
 }
 
+#[cfg(target_os = "windows")]
+pub async fn apply_asar_update(asar_path: &std::path::Path, version: &str) -> anyhow::Result<()> {
+    let install = install_dir();
+    let dest = install.join("resources").join("app.asar");
+
+    info!(
+        "Hot-swapping asar {} → {}",
+        asar_path.display(),
+        dest.display()
+    );
+
+    let tmp = dest.with_extension("asar.new");
+    tokio::fs::copy(asar_path, &tmp).await?;
+    tokio::fs::rename(&tmp, &dest).await?;
+    tokio::fs::remove_file(asar_path).await.ok();
+
+    crate::update::set_installed_version(version);
+    info!("Asar hot-swap applied");
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub async fn apply_asar_update(_asar_path: &std::path::Path, _version: &str) -> anyhow::Result<()> {
+    Err(anyhow::anyhow!(
+        "asar fast-path is not supported on this platform"
+    ))
+}
 
 #[cfg(target_os = "macos")]
 async fn apply_dmg(
@@ -195,7 +221,8 @@ async fn apply_dmg(
     if !out.status.success() {
         return Err(anyhow::anyhow!(
             "hdiutil attach failed:\nstdout: {}\nstderr: {}",
-            stdout, stderr
+            stdout,
+            stderr
         ));
     }
 
@@ -209,9 +236,7 @@ async fn apply_dmg(
             let s = s.strip_suffix("</string>")?;
             Some(s.to_string())
         })
-        .ok_or_else(|| anyhow::anyhow!(
-            "No mount-point found in hdiutil output:\n{}", stdout
-        ))?;
+        .ok_or_else(|| anyhow::anyhow!("No mount-point found in hdiutil output:\n{}", stdout))?;
 
     info!("DMG mounted at: {}", mount_point);
 
@@ -249,7 +274,6 @@ async fn apply_dmg(
     Ok(())
 }
 
-
 #[cfg(target_os = "linux")]
 async fn apply_appimage(
     appimage_path: &std::path::Path,
@@ -278,12 +302,15 @@ async fn apply_appimage(
     Ok(())
 }
 
-
 #[cfg(target_os = "linux")]
 async fn apply_deb(deb_path: &std::path::Path) -> anyhow::Result<()> {
     use tokio::process::Command;
 
-    let status = Command::new("dpkg").args(["-i"]).arg(deb_path).status().await?;
+    let status = Command::new("dpkg")
+        .args(["-i"])
+        .arg(deb_path)
+        .status()
+        .await?;
     if !status.success() {
         return Err(anyhow::anyhow!("dpkg -i failed"));
     }

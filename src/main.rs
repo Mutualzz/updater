@@ -4,7 +4,7 @@ mod platform;
 mod splash;
 mod update;
 
-use log::{info, warn, error};
+use log::{error, info, warn};
 
 #[derive(Debug, Clone)]
 pub enum SplashCmd {
@@ -72,7 +72,8 @@ fn main() {
     if let Some(pos) = args.iter().position(|a| a == "--apply") {
         if let Some(path) = args.get(pos + 1) {
             let path = std::path::PathBuf::from(path);
-            let version = args.iter()
+            let version = args
+                .iter()
                 .position(|a| a == "--version")
                 .and_then(|p| args.get(p + 1))
                 .cloned()
@@ -87,14 +88,12 @@ fn main() {
                 rt.block_on(async move {
                     let _ = splash_tx.send(SplashCmd::SetStatus("Applying update...".into()));
 
-                    match platform::apply_update(&path, &version).await {
-                        Ok(_) => {
-                        }
+                    match platform::apply_update(&path, &version, None).await {
+                        Ok(_) => {}
                         Err(e) => {
                             error!("Apply failed: {}", e);
-                            let _ = splash_tx.send(SplashCmd::SetStatus(
-                                format!("Update failed: {}", e)
-                            ));
+                            let _ = splash_tx
+                                .send(SplashCmd::SetStatus(format!("Update failed: {}", e)));
                             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                             let _ = splash_tx.send(SplashCmd::Close);
                         }
@@ -131,7 +130,10 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
             if marker_ver == installed {
                 info!("Just updated to {} — skipping check", installed);
             } else {
-                warn!("Stale marker (marker={}, installed={}) — checking anyway", marker_ver, installed);
+                warn!(
+                    "Stale marker (marker={}, installed={}) — checking anyway",
+                    marker_ver, installed
+                );
             }
             marker_ver == installed
         } else {
@@ -148,35 +150,77 @@ async fn async_main(splash_tx: std::sync::mpsc::Sender<SplashCmd>) {
             Ok(Some(manifest)) => {
                 info!("Update available: {}", manifest.version);
                 let version = manifest.version.clone();
-                let tx = splash_tx.clone();
 
-                match update::download_update(&manifest, move |percent, bps, _dl, _total| {
-                    let _ = tx.send(SplashCmd::SetProgress(percent));
-                    let _ = tx.send(SplashCmd::SetStatus(format!(
-                        "Downloading... {:.0}%  ({:.1} MB/s)",
-                        percent,
-                        bps as f64 / 1_048_576.0
-                    )));
-                }).await {
-                    Ok(path) => {
-                        info!("Update downloaded: {}", path.display());
-                        let _ = splash_tx.send(SplashCmd::SetProgress(100.0));
-                        let _ = splash_tx.send(SplashCmd::SetStatus("Applying update...".into()));
+                if let Some(asar) = manifest.asar_update() {
+                    info!("Electron runtime unchanged — using fast asar update");
+                    let tx = splash_tx.clone();
 
-                        if let Err(e) = platform::apply_update(&path, &version).await {
-                            error!("Failed to apply update: {}", e);
-                            let _ = splash_tx.send(SplashCmd::SetStatus(
-                                format!("Update failed: {}", e)
-                            ));
+                    match update::download_asar_update(&asar, move |percent, bps, _dl, _total| {
+                        let _ = tx.send(SplashCmd::SetProgress(percent));
+                        let _ = tx.send(SplashCmd::SetStatus(format!(
+                            "Downloading update... {:.0}%  ({:.1} MB/s)",
+                            percent,
+                            bps as f64 / 1_048_576.0
+                        )));
+                    })
+                    .await
+                    {
+                        Ok(path) => {
+                            info!("Asar update downloaded: {}", path.display());
+                            let _ = splash_tx.send(SplashCmd::SetProgress(100.0));
+                            let _ =
+                                splash_tx.send(SplashCmd::SetStatus("Applying update...".into()));
+
+                            if let Err(e) = platform::apply_asar_update(&path, &version).await {
+                                error!("Failed to apply asar update: {}", e);
+                                let _ = splash_tx
+                                    .send(SplashCmd::SetStatus(format!("Update failed: {}", e)));
+                                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                            }
+                        }
+                        Err(e) => {
+                            error!("Asar download failed: {}", e);
+                            let _ = splash_tx
+                                .send(SplashCmd::SetStatus(format!("Download failed: {}", e)));
                             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                         }
                     }
-                    Err(e) => {
-                        error!("Download failed: {}", e);
-                        let _ = splash_tx.send(SplashCmd::SetStatus(
-                            format!("Download failed: {}", e)
-                        ));
-                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                } else {
+                    let electron_version = manifest.electron_version_for_current_platform();
+                    let tx = splash_tx.clone();
+
+                    match update::download_update(&manifest, move |percent, bps, _dl, _total| {
+                        let _ = tx.send(SplashCmd::SetProgress(percent));
+                        let _ = tx.send(SplashCmd::SetStatus(format!(
+                            "Downloading... {:.0}%  ({:.1} MB/s)",
+                            percent,
+                            bps as f64 / 1_048_576.0
+                        )));
+                    })
+                    .await
+                    {
+                        Ok(path) => {
+                            info!("Update downloaded: {}", path.display());
+                            let _ = splash_tx.send(SplashCmd::SetProgress(100.0));
+                            let _ =
+                                splash_tx.send(SplashCmd::SetStatus("Applying update...".into()));
+
+                            if let Err(e) =
+                                platform::apply_update(&path, &version, electron_version.as_deref())
+                                    .await
+                            {
+                                error!("Failed to apply update: {}", e);
+                                let _ = splash_tx
+                                    .send(SplashCmd::SetStatus(format!("Update failed: {}", e)));
+                                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                            }
+                        }
+                        Err(e) => {
+                            error!("Download failed: {}", e);
+                            let _ = splash_tx
+                                .send(SplashCmd::SetStatus(format!("Download failed: {}", e)));
+                            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                        }
                     }
                 }
             }
