@@ -88,7 +88,7 @@ fn main() {
                 rt.block_on(async move {
                     let _ = splash_tx.send(SplashCmd::SetStatus("Applying update...".into()));
 
-                    match platform::apply_update(&path, &version, None).await {
+                    match platform::apply_update(&path, &version, None, None).await {
                         Ok(_) => {
                             update::cleanup_update_temp();
                             apply_ok_thread.store(true, Ordering::SeqCst);
@@ -256,6 +256,7 @@ async fn async_main(
                     }
                 } else {
                     let electron_version = manifest.electron_version_for_current_platform();
+                    let updater_version = manifest.updater_version_for_current_platform();
                     let tx = splash_tx.clone();
 
                     match update::download_update(&manifest, move |percent, bps, dl, total| {
@@ -276,6 +277,7 @@ async fn async_main(
                                 &path,
                                 &version,
                                 electron_version.as_deref(),
+                                updater_version.as_deref(),
                             )
                             .await
                             {

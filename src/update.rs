@@ -29,6 +29,8 @@ struct PlatformAsset {
     sha256: String,
     #[serde(rename = "electronVersion", default)]
     electron_version: Option<String>,
+    #[serde(rename = "updaterVersion", default)]
+    updater_version: Option<String>,
     #[serde(default)]
     asar: Option<AsarAsset>,
 }
@@ -73,6 +75,10 @@ impl UpdateManifest {
         self.asset_for_current_platform()?.electron_version
     }
 
+    pub fn updater_version_for_current_platform(&self) -> Option<String> {
+        self.asset_for_current_platform()?.updater_version
+    }
+
     pub fn asar_update(&self) -> Option<AsarUpdate> {
         let asset = self.asset_for_current_platform()?;
         let asar = asset.asar?;
@@ -81,6 +87,22 @@ impl UpdateManifest {
 
         if installed_electron.is_empty() || remote_electron != installed_electron {
             return None;
+        }
+
+        if let Some(remote_updater) = asset.updater_version.as_deref() {
+            let installed_updater = get_installed_updater_version();
+            if installed_updater.is_empty() || installed_updater != remote_updater {
+                info!(
+                    "Updater version mismatch (installed={}, remote={}) — forcing full package",
+                    if installed_updater.is_empty() {
+                        "none"
+                    } else {
+                        installed_updater.as_str()
+                    },
+                    remote_updater
+                );
+                return None;
+            }
         }
 
         Some(AsarUpdate {
@@ -247,6 +269,12 @@ pub fn seed_installed_versions_if_needed() {
             set_installed_electron_version(&ev);
         }
     }
+
+    if get_installed_updater_version().is_empty() {
+        if let Some(uv) = read_bundled_resource("updater-runtime-version.txt") {
+            set_installed_updater_version(&uv);
+        }
+    }
 }
 
 pub fn electron_version_file_path() -> PathBuf {
@@ -270,6 +298,29 @@ pub fn set_installed_electron_version(version: &str) {
     }
     std::fs::write(&path, version.as_bytes()).ok();
     info!("Wrote installed Electron version: {}", version);
+}
+
+pub fn updater_version_file_path() -> PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
+        .join("Mutualzz")
+        .join("updater-version.txt")
+}
+
+pub fn get_installed_updater_version() -> String {
+    std::fs::read_to_string(updater_version_file_path())
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+pub fn set_installed_updater_version(version: &str) {
+    let path = updater_version_file_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    std::fs::write(&path, version.as_bytes()).ok();
+    info!("Wrote installed updater version: {}", version);
 }
 
 pub fn update_temp_dir() -> PathBuf {
