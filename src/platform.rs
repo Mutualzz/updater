@@ -84,6 +84,7 @@ pub async fn apply_update(
     update_path: &std::path::Path,
     version: &str,
     electron_version: Option<&str>,
+    updater_version: Option<&str>,
 ) -> anyhow::Result<()> {
     let install = install_dir();
     info!("Applying {} → {}", update_path.display(), install.display());
@@ -98,6 +99,9 @@ pub async fn apply_update(
             if let Some(ev) = electron_version {
                 crate::update::set_installed_electron_version(ev);
             }
+            if let Some(uv) = updater_version {
+                crate::update::set_installed_updater_version(uv);
+            }
             std::fs::write(just_updated_marker(), version.as_bytes()).ok();
             crate::update::cleanup_update_temp();
             relaunch_bootstrapper();
@@ -105,7 +109,7 @@ pub async fn apply_update(
 
         #[cfg(target_os = "windows")]
         "exe" => {
-            let _ = (version, electron_version);
+            let _ = (version, electron_version, updater_version);
             apply_nsis(update_path).await?;
             Ok(())
         }
@@ -116,6 +120,9 @@ pub async fn apply_update(
             crate::update::set_installed_version(version);
             if let Some(ev) = electron_version {
                 crate::update::set_installed_electron_version(ev);
+            }
+            if let Some(uv) = updater_version {
+                crate::update::set_installed_updater_version(uv);
             }
             std::fs::write(just_updated_marker(), version.as_bytes()).ok();
             crate::update::cleanup_update_temp();
@@ -129,6 +136,9 @@ pub async fn apply_update(
             if let Some(ev) = electron_version {
                 crate::update::set_installed_electron_version(ev);
             }
+            if let Some(uv) = updater_version {
+                crate::update::set_installed_updater_version(uv);
+            }
             std::fs::write(just_updated_marker(), version.as_bytes()).ok();
             crate::update::cleanup_update_temp();
             relaunch_bootstrapper();
@@ -141,6 +151,9 @@ pub async fn apply_update(
             if let Some(ev) = electron_version {
                 crate::update::set_installed_electron_version(ev);
             }
+            if let Some(uv) = updater_version {
+                crate::update::set_installed_updater_version(uv);
+            }
             std::fs::write(just_updated_marker(), version.as_bytes()).ok();
             crate::update::cleanup_update_temp();
             relaunch_bootstrapper();
@@ -152,6 +165,9 @@ pub async fn apply_update(
             crate::update::set_installed_version(version);
             if let Some(ev) = electron_version {
                 crate::update::set_installed_electron_version(ev);
+            }
+            if let Some(uv) = updater_version {
+                crate::update::set_installed_updater_version(uv);
             }
             std::fs::write(just_updated_marker(), version.as_bytes()).ok();
             crate::update::cleanup_update_temp();
