@@ -284,6 +284,7 @@ pub async fn apply_asar_update(asar_path: &std::path::Path, version: &str) -> an
     tokio::fs::remove_file(asar_path).await.ok();
 
     crate::update::set_installed_version(version);
+    std::fs::write(just_updated_marker(), version.as_bytes()).ok();
     info!("Asar hot-swap applied");
     Ok(())
 }
