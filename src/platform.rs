@@ -206,6 +206,12 @@ pub async fn apply_zip_package(
 
     finish_apply(version, electron_version, updater_version);
 
+    #[cfg(target_os = "windows")]
+    {
+        let _ = crate::install::rewrite_windows_shortcuts();
+        let _ = crate::install::register_windows_uninstall_entry(version);
+    }
+
     tokio::fs::remove_file(zip_path).await.ok();
     relaunch_bootstrapper();
 }

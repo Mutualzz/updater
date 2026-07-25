@@ -114,8 +114,11 @@ pub fn migrate_legacy_layout_if_needed() -> anyhow::Result<()> {
                 set_current_version(&version);
                 std::fs::write(layout_v2_marker(), b"2").ok();
                 #[cfg(target_os = "windows")]
-                if let Err(e) = crate::install::rewrite_windows_shortcuts() {
-                    warn!("Failed to rewrite shortcuts after migration: {}", e);
+                {
+                    if let Err(e) = crate::install::rewrite_windows_shortcuts() {
+                        warn!("Failed to rewrite shortcuts after migration: {}", e);
+                    }
+                    let _ = crate::install::register_windows_uninstall_entry(&version);
                 }
                 return Ok(());
             }
@@ -143,8 +146,11 @@ pub fn migrate_legacy_layout_if_needed() -> anyhow::Result<()> {
             info!("Legacy layout migration complete");
 
             #[cfg(target_os = "windows")]
-            if let Err(e) = crate::install::rewrite_windows_shortcuts() {
-                warn!("Failed to rewrite shortcuts after migration: {}", e);
+            {
+                if let Err(e) = crate::install::rewrite_windows_shortcuts() {
+                    warn!("Failed to rewrite shortcuts after migration: {}", e);
+                }
+                let _ = crate::install::register_windows_uninstall_entry(&version);
             }
         }
     }
