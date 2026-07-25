@@ -1,5 +1,7 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
+mod install;
+mod layout;
 mod platform;
 mod splash;
 mod update;
@@ -33,11 +35,15 @@ fn main() {
     #[cfg(windows)]
     platform::set_app_user_model_id();
 
+    layout::ensure_data_dirs();
+    if let Err(e) = layout::migrate_legacy_layout_if_needed() {
+        warn!("Legacy layout migration failed: {}", e);
+    }
+
     let args: Vec<String> = std::env::args().collect();
-    let is_apply = args.iter().any(|a| a == "--apply");
     let splash_fast = args.iter().any(|a| a == "--fast");
 
-    let _lock = acquire_single_instance_lock(is_apply);
+    let _lock = acquire_single_instance_lock();
 
     if args.iter().any(|a| a == "--splash-test") {
         let (tx, rx) = std::sync::mpsc::channel::<SplashCmd>();
@@ -67,53 +73,36 @@ fn main() {
         return;
     }
 
-    if let Some(pos) = args.iter().position(|a| a == "--apply") {
-        if let Some(path) = args.get(pos + 1) {
-            let path = std::path::PathBuf::from(path);
-            let version = args
-                .iter()
-                .position(|a| a == "--version")
-                .and_then(|p| args.get(p + 1))
-                .cloned()
-                .unwrap_or_else(|| "pending".to_string());
-            let electron_version = args
-                .iter()
-                .position(|a| a == "--electron-version")
-                .and_then(|p| args.get(p + 1))
-                .cloned();
-            let updater_version = args
-                .iter()
-                .position(|a| a == "--updater-version")
-                .and_then(|p| args.get(p + 1))
-                .cloned();
+    if should_run_install(&args) {
+        let install_args = if args.iter().any(|a| a == "--install") {
+            args.clone()
+        } else {
+            vec![args[0].clone(), "--install".to_string()]
+        };
 
-            info!("--apply mode: {} (version: {})", path.display(), version);
+        if let Some((zip_path, version)) = install::parse_install_args(&install_args) {
+            info!(
+                "--install mode: {} (version: {})",
+                zip_path.display(),
+                version
+            );
 
             let (splash_tx, splash_rx) = std::sync::mpsc::channel::<SplashCmd>();
-            let apply_ok = Arc::new(AtomicBool::new(false));
-            let apply_ok_thread = apply_ok.clone();
+            let install_ok = Arc::new(AtomicBool::new(false));
+            let install_ok_thread = install_ok.clone();
 
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
                 rt.block_on(async move {
-                    let _ = splash_tx.send(SplashCmd::SetStatus("Applying update...".into()));
-
-                    match platform::apply_update(
-                        &path,
-                        &version,
-                        electron_version.as_deref(),
-                        updater_version.as_deref(),
-                    )
-                    .await
-                    {
-                        Ok(_) => {
-                            update::cleanup_update_temp();
-                            apply_ok_thread.store(true, Ordering::SeqCst);
+                    match install::run_install(splash_tx.clone(), zip_path, version).await {
+                        Ok(()) => {
+                            install_ok_thread.store(true, Ordering::SeqCst);
+                            let _ = splash_tx.send(SplashCmd::Close);
                         }
                         Err(e) => {
-                            error!("Apply failed: {}", e);
+                            error!("Install failed: {}", e);
                             let _ = splash_tx
-                                .send(SplashCmd::SetStatus(format!("Update failed: {}", e)));
+                                .send(SplashCmd::SetStatus(format!("Install failed: {}", e)));
                             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                             let _ = splash_tx.send(SplashCmd::Close);
                         }
@@ -123,12 +112,39 @@ fn main() {
 
             splash::run(splash_rx, None);
 
-            if !apply_ok.load(Ordering::SeqCst) {
-                warn!("Apply failed — relaunching existing app");
-                platform::exec_into_electron();
+            if install_ok.load(Ordering::SeqCst) {
+                #[cfg(windows)]
+                {
+                    use std::os::windows::process::CommandExt;
+                    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x01000000;
+                    const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+
+                    let update_exe = layout::bootstrapper_at_data_root();
+                    std::process::Command::new(&update_exe)
+                        .creation_flags(CREATE_BREAKAWAY_FROM_JOB | CREATE_NEW_PROCESS_GROUP)
+                        .spawn()
+                        .expect("Failed to launch Update.exe after install");
+                    std::process::exit(0);
+                }
+
+                #[cfg(not(windows))]
+                {
+                    platform::exec_into_electron();
+                }
             }
-            return;
+        } else {
+            error!("Install mode requested but no install package was found");
+            let (splash_tx, splash_rx) = std::sync::mpsc::channel::<SplashCmd>();
+            let _ = splash_tx.send(SplashCmd::SetStatus(
+                "Install failed: package not found".into(),
+            ));
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                let _ = splash_tx.send(SplashCmd::Close);
+            });
+            splash::run(splash_rx, None);
         }
+        return;
     }
 
     info!("Mutualzz bootstrapper starting");
@@ -147,11 +163,31 @@ fn main() {
     splash::run(splash_rx, Some(skip_launch));
 }
 
-fn acquire_single_instance_lock(is_apply: bool) -> Option<std::fs::File> {
-    if is_apply {
-        return None;
+fn should_run_install(args: &[String]) -> bool {
+    if args.iter().any(|a| a == "--install") {
+        return install::parse_install_args(args).is_some();
     }
 
+    #[cfg(target_os = "windows")]
+    {
+        let is_setup = std::env::current_exe()
+            .ok()
+            .and_then(|p| {
+                p.file_stem()
+                    .map(|s| s.to_string_lossy().to_ascii_lowercase())
+            })
+            .map(|name| name.contains("setup"))
+            .unwrap_or(false);
+
+        if is_setup && install::bundled_install_zip().is_some() {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn acquire_single_instance_lock() -> Option<std::fs::File> {
     let lock_path = std::env::temp_dir().join("mutualzz-updater.lock");
 
     #[cfg(windows)]
@@ -199,7 +235,22 @@ async fn async_main(
     splash_tx: std::sync::mpsc::Sender<SplashCmd>,
     skip_launch: Arc<AtomicBool>,
 ) {
-    let skip_check = {
+    let _ = splash_tx.send(SplashCmd::SetStatus("Checking for updates...".into()));
+
+    let applied_in_process = match update::apply_staged_or_pending().await {
+        Ok(update::StagedApplyOutcome::AppliedInProcess) => true,
+        Ok(update::StagedApplyOutcome::None) => false,
+        Err(e) => {
+            warn!("Staged apply failed: {}", e);
+            let _ = splash_tx.send(SplashCmd::SetStatus(format!("Update failed: {}", e)));
+            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+            false
+        }
+    };
+
+    let skip_check = if applied_in_process {
+        true
+    } else {
         let marker = platform::just_updated_marker();
         if let Ok(marker_version) = std::fs::read_to_string(&marker) {
             let marker_ver = marker_version.trim();
@@ -271,7 +322,7 @@ async fn async_main(
                             tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
                         }
                     }
-                } else {
+                } else if manifest.package_download_for_current_platform().is_some() {
                     let electron_version = manifest.electron_version_for_current_platform();
                     let updater_version = manifest.updater_version_for_current_platform();
                     let tx = splash_tx.clone();
@@ -319,6 +370,9 @@ async fn async_main(
                             tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
                         }
                     }
+                } else {
+                    warn!("No applicable update path for current platform");
+                    let _ = splash_tx.send(SplashCmd::SetStatus("Up to date!".into()));
                 }
             }
             Ok(None) => {
