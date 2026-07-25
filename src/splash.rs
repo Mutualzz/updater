@@ -357,7 +357,7 @@ pub fn run(rx: std::sync::mpsc::Receiver<SplashCmd>, skip_launch: Option<Arc<Ato
             .with_decorations(false)
             .with_transparent(true)
             .with_always_on_top()
-            .with_taskbar(false),
+            .with_taskbar(true),
         centered: true,
         vsync: true,
         ..Default::default()
