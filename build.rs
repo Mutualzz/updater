@@ -3,7 +3,15 @@ fn main() {
     {
         let mut res = winres::WindowsResource::new();
         res.set_icon("./resources/icon.ico");
-        res.set_manifest(r#"
+        res.set_language(0x0409);
+        res.set("ProductName", "Mutualzz");
+        res.set("FileDescription", "Mutualzz");
+        res.set("CompanyName", "Mutualzz");
+        res.set("InternalName", "Mutualzz");
+        res.set("OriginalFilename", "Update.exe");
+        res.set("LegalCopyright", "Copyright (C) Mutualzz");
+        res.set_manifest(
+            r#"
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
@@ -19,7 +27,8 @@ fn main() {
     </windowsSettings>
   </application>
 </assembly>
-"#);
+"#,
+        );
         res.compile().unwrap();
     }
 }

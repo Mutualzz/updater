@@ -220,16 +220,23 @@ pub async fn extract_zip_package(zip_path: &Path, dest: &Path) -> anyhow::Result
 
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
-        let name = entry.name().to_string();
-        let out_path = dest.join(&name);
+        let raw_name = entry.name().to_string();
+        let normalized = raw_name.replace('\\', "/");
+        let is_dir = normalized.ends_with('/');
 
-        if name.ends_with('/') {
+        let Some(relative) = sanitize_zip_entry(&normalized) else {
+            continue;
+        };
+
+        let out_path = dest.join(&relative);
+
+        if is_dir {
             tokio::fs::create_dir_all(&out_path).await.ok();
             continue;
         }
 
         if let Some(parent) = out_path.parent() {
-            tokio::fs::create_dir_all(parent).await.ok();
+            tokio::fs::create_dir_all(parent).await?;
         }
 
         let mut buffer = Vec::new();
@@ -239,6 +246,31 @@ pub async fn extract_zip_package(zip_path: &Path, dest: &Path) -> anyhow::Result
 
     info!("Extracted {} → {}", zip_path.display(), dest.display());
     Ok(())
+}
+
+fn sanitize_zip_entry(normalized: &str) -> Option<std::path::PathBuf> {
+    let trimmed = normalized.trim();
+    let trimmed = trimmed.strip_prefix("./").unwrap_or(trimmed);
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let mut path = std::path::PathBuf::new();
+    for component in trimmed.split('/') {
+        if component.is_empty() || component == "." {
+            continue;
+        }
+        if component == ".." {
+            return None;
+        }
+        path.push(component);
+    }
+
+    if path.as_os_str().is_empty() {
+        None
+    } else {
+        Some(path)
+    }
 }
 
 fn update_format(path: &std::path::Path) -> String {
