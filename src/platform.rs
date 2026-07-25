@@ -1,9 +1,43 @@
 use log::info;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub fn electron_exe_path() -> PathBuf {
     if let Ok(path) = std::env::var("UPDATER_ELECTRON_PATH") {
         return PathBuf::from(path);
+    }
+
+    if let Some(app_dir) = crate::layout::resolve_active_app_dir() {
+        #[cfg(target_os = "macos")]
+        {
+            let mac = app_dir
+                .join("Mutualzz.app")
+                .join("Contents")
+                .join("MacOS")
+                .join("MutualzzApp");
+            if mac.is_file() {
+                return mac;
+            }
+            let flat = app_dir.join("Contents").join("MacOS").join("MutualzzApp");
+            if flat.is_file() {
+                return flat;
+            }
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            let exe = app_dir.join("mutualzz.exe");
+            if exe.is_file() {
+                return exe;
+            }
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let bin = app_dir.join("mutualzz-bin");
+            if bin.is_file() {
+                return bin;
+            }
+        }
     }
 
     let bootstrapper = std::env::current_exe().expect("Cannot resolve bootstrapper path");
@@ -20,6 +54,18 @@ pub fn electron_exe_path() -> PathBuf {
 }
 
 pub fn install_dir() -> PathBuf {
+    if let Some(app_dir) = crate::layout::resolve_active_app_dir() {
+        #[cfg(target_os = "macos")]
+        {
+            let bundled = app_dir.join("Mutualzz.app");
+            if bundled.is_dir() {
+                return bundled;
+            }
+            return app_dir;
+        }
+        return app_dir;
+    }
+
     let bootstrapper = std::env::current_exe().expect("Cannot resolve bootstrapper path");
     let dir = bootstrapper.parent().expect("No parent dir");
 
@@ -81,101 +127,118 @@ pub fn exec_into_electron() -> ! {
 }
 
 pub async fn apply_update(
-    update_path: &std::path::Path,
+    update_path: &Path,
     version: &str,
     electron_version: Option<&str>,
     updater_version: Option<&str>,
 ) -> anyhow::Result<()> {
-    let install = install_dir();
-    info!("Applying {} → {}", update_path.display(), install.display());
+    info!("Applying {} for version {}", update_path.display(), version);
 
     let format = update_format(update_path);
 
     match format.as_str() {
-        #[cfg(target_os = "macos")]
-        "dmg" => {
-            apply_dmg(update_path, &install).await?;
-            crate::update::set_installed_version(version);
-            if let Some(ev) = electron_version {
-                crate::update::set_installed_electron_version(ev);
-            }
-            if let Some(uv) = updater_version {
-                crate::update::set_installed_updater_version(uv);
-            }
-            std::fs::write(just_updated_marker(), version.as_bytes()).ok();
-            crate::update::cleanup_update_temp();
-            relaunch_bootstrapper();
+        "asar" => {
+            apply_asar_update(update_path, version).await?;
+            finish_apply(version, electron_version, updater_version);
         }
 
-        #[cfg(target_os = "windows")]
-        "exe" => {
-            let _ = (version, electron_version, updater_version);
-            apply_nsis(update_path).await?;
-            Ok(())
+        "zip" => {
+            apply_zip_package(update_path, version, electron_version, updater_version).await?;
+        }
+
+        #[cfg(target_os = "linux")]
+        "AppImage" if !crate::layout::can_apply_full_zip() => {
+            return Err(anyhow::anyhow!(
+                "Full AppImage updates require the AppImage build. Download from mutualzz.com."
+            ));
         }
 
         #[cfg(target_os = "linux")]
         "AppImage" => {
-            apply_appimage(update_path, &install).await?;
-            crate::update::set_installed_version(version);
-            if let Some(ev) = electron_version {
-                crate::update::set_installed_electron_version(ev);
-            }
-            if let Some(uv) = updater_version {
-                crate::update::set_installed_updater_version(uv);
-            }
-            std::fs::write(just_updated_marker(), version.as_bytes()).ok();
-            crate::update::cleanup_update_temp();
+            apply_appimage(update_path, &install_dir()).await?;
+            finish_apply(version, electron_version, updater_version);
             relaunch_bootstrapper();
         }
 
         #[cfg(target_os = "linux")]
-        "deb" => {
-            apply_deb(update_path).await?;
-            crate::update::set_installed_version(version);
-            if let Some(ev) = electron_version {
-                crate::update::set_installed_electron_version(ev);
-            }
-            if let Some(uv) = updater_version {
-                crate::update::set_installed_updater_version(uv);
-            }
-            std::fs::write(just_updated_marker(), version.as_bytes()).ok();
-            crate::update::cleanup_update_temp();
-            relaunch_bootstrapper();
-        }
-
-        #[cfg(target_os = "linux")]
-        "rpm" => {
-            apply_rpm(update_path).await?;
-            crate::update::set_installed_version(version);
-            if let Some(ev) = electron_version {
-                crate::update::set_installed_electron_version(ev);
-            }
-            if let Some(uv) = updater_version {
-                crate::update::set_installed_updater_version(uv);
-            }
-            std::fs::write(just_updated_marker(), version.as_bytes()).ok();
-            crate::update::cleanup_update_temp();
-            relaunch_bootstrapper();
-        }
-
-        #[cfg(target_os = "linux")]
-        "pacman" => {
-            apply_pacman(update_path).await?;
-            crate::update::set_installed_version(version);
-            if let Some(ev) = electron_version {
-                crate::update::set_installed_electron_version(ev);
-            }
-            if let Some(uv) = updater_version {
-                crate::update::set_installed_updater_version(uv);
-            }
-            std::fs::write(just_updated_marker(), version.as_bytes()).ok();
-            crate::update::cleanup_update_temp();
-            relaunch_bootstrapper();
+        "deb" | "rpm" | "pacman" => {
+            return Err(anyhow::anyhow!(
+                "Package manager updates are not supported in-app. Use the AppImage build."
+            ));
         }
 
         other => return Err(anyhow::anyhow!("Unknown update format: {}", other)),
     }
+
+    Ok(())
+}
+
+fn finish_apply(
+    version: &str,
+    electron_version: Option<&str>,
+    updater_version: Option<&str>,
+) {
+    crate::update::set_installed_version(version);
+    if let Some(ev) = electron_version {
+        crate::update::set_installed_electron_version(ev);
+    }
+    if let Some(uv) = updater_version {
+        crate::update::set_installed_updater_version(uv);
+    }
+    std::fs::write(just_updated_marker(), version.as_bytes()).ok();
+    crate::update::cleanup_packages_dir();
+}
+
+pub async fn apply_zip_package(
+    zip_path: &Path,
+    version: &str,
+    electron_version: Option<&str>,
+    updater_version: Option<&str>,
+) -> anyhow::Result<()> {
+    let dest = crate::layout::app_version_dir(version);
+    if dest.exists() {
+        tokio::fs::remove_dir_all(&dest).await.ok();
+    }
+
+    extract_zip_package(zip_path, &dest).await?;
+    crate::layout::set_current_version(version);
+    crate::layout::hoist_windows_update_exe(&dest)?;
+
+    finish_apply(version, electron_version, updater_version);
+
+    tokio::fs::remove_file(zip_path).await.ok();
+    relaunch_bootstrapper();
+}
+
+pub async fn extract_zip_package(zip_path: &Path, dest: &Path) -> anyhow::Result<()> {
+    use std::io::Read;
+    use zip::ZipArchive;
+
+    tokio::fs::create_dir_all(dest).await?;
+    let file = std::fs::File::open(zip_path)?;
+    let mut archive = ZipArchive::new(file)?;
+
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i)?;
+        let name = entry.name().to_string();
+        let out_path = dest.join(&name);
+
+        if name.ends_with('/') {
+            tokio::fs::create_dir_all(&out_path).await.ok();
+            continue;
+        }
+
+        if let Some(parent) = out_path.parent() {
+            tokio::fs::create_dir_all(parent).await.ok();
+        }
+
+        let mut buffer = Vec::new();
+        entry.read_to_end(&mut buffer)?;
+        tokio::fs::write(&out_path, buffer).await?;
+    }
+
+    info!("Extracted {} → {}", zip_path.display(), dest.display());
+    Ok(())
 }
 
 fn update_format(path: &std::path::Path) -> String {
@@ -201,11 +264,14 @@ fn update_format(path: &std::path::Path) -> String {
     {
         return "pacman".to_string();
     }
+    if name.ends_with(".zip") {
+        return "zip".to_string();
+    }
+    if name.ends_with(".asar") {
+        return "asar".to_string();
+    }
     if name.ends_with(".dmg") {
         return "dmg".to_string();
-    }
-    if name.ends_with(".exe") {
-        return "exe".to_string();
     }
 
     path.extension()
@@ -216,37 +282,28 @@ fn update_format(path: &std::path::Path) -> String {
 
 #[cfg(unix)]
 fn relaunch_bootstrapper() -> ! {
-    #[cfg(target_os = "linux")]
-    let exe = std::env::var("APPIMAGE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| std::env::current_exe().expect("Cannot resolve bootstrapper path"));
-
-    #[cfg(not(target_os = "linux"))]
-    let exe = std::env::current_exe().expect("Cannot resolve bootstrapper path");
+    let exe = crate::layout::bootstrapper_at_data_root();
 
     info!("Relaunching bootstrapper: {}", exe.display());
-    std::thread::sleep(std::time::Duration::from_secs(2));
+    std::thread::sleep(std::time::Duration::from_secs(1));
     use std::os::unix::process::CommandExt;
     let err = std::process::Command::new(&exe).exec();
     panic!("Failed to re-exec: {}", err);
 }
 
-#[cfg(target_os = "windows")]
-async fn apply_nsis(installer_path: &std::path::Path) -> anyhow::Result<()> {
+#[cfg(windows)]
+fn relaunch_bootstrapper() -> ! {
+    let exe = crate::layout::bootstrapper_at_data_root();
     use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x01000000;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
-    const DETACHED_PROCESS: u32 = 0x00000008;
 
-    std::process::Command::new(installer_path)
-        .arg("/S")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS)
-        .spawn()?;
-
-    info!("NSIS launched detached, exiting");
+    info!("Relaunching bootstrapper: {}", exe.display());
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    std::process::Command::new(&exe)
+        .creation_flags(CREATE_BREAKAWAY_FROM_JOB | CREATE_NEW_PROCESS_GROUP)
+        .spawn()
+        .expect("Failed to relaunch bootstrapper");
     std::process::exit(0);
 }
 
@@ -308,81 +365,6 @@ pub fn set_app_user_model_id() {
     }
 }
 
-#[cfg(target_os = "macos")]
-async fn apply_dmg(
-    dmg_path: &std::path::Path,
-    install_dir: &std::path::Path,
-) -> anyhow::Result<()> {
-    use tokio::process::Command;
-
-    let out = Command::new("hdiutil")
-        .args(["attach", "-nobrowse", "-noverify", "-plist"])
-        .arg(dmg_path)
-        .output()
-        .await?;
-
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-
-    if !out.status.success() {
-        return Err(anyhow::anyhow!(
-            "hdiutil attach failed:\nstdout: {}\nstderr: {}",
-            stdout,
-            stderr
-        ));
-    }
-
-    let mount_point = stdout
-        .lines()
-        .skip_while(|l| !l.contains("<key>mount-point</key>"))
-        .nth(1)
-        .and_then(|l| {
-            let s = l.trim();
-            let s = s.strip_prefix("<string>")?;
-            let s = s.strip_suffix("</string>")?;
-            Some(s.to_string())
-        })
-        .ok_or_else(|| anyhow::anyhow!("No mount-point found in hdiutil output:\n{}", stdout))?;
-
-    info!("DMG mounted at: {}", mount_point);
-
-    let app_in_dmg = std::fs::read_dir(&mount_point)?
-        .filter_map(|e| e.ok())
-        .find(|e| e.path().extension().and_then(|x| x.to_str()) == Some("app"))
-        .map(|e| e.path())
-        .ok_or_else(|| anyhow::anyhow!("No .app in DMG at: {}", mount_point))?;
-
-    info!("Found app: {}", app_in_dmg.display());
-
-    let apps_dir = install_dir
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("No parent dir for install_dir"))?;
-
-    let rsync = Command::new("rsync")
-        .args(["-a", "--delete", "--no-times"])
-        .arg(&app_in_dmg)
-        .arg(apps_dir)
-        .status()
-        .await?;
-
-    if !rsync.success() {
-        let _ = Command::new("hdiutil")
-            .args(["detach", "-quiet", &mount_point])
-            .status()
-            .await;
-        return Err(anyhow::anyhow!("rsync failed: {:?}", rsync.code()));
-    }
-
-    let _ = Command::new("hdiutil")
-        .args(["detach", "-quiet", &mount_point])
-        .status()
-        .await;
-
-    tokio::fs::remove_file(dmg_path).await.ok();
-    info!("macOS update applied");
-    Ok(())
-}
-
 #[cfg(target_os = "linux")]
 async fn apply_appimage(
     appimage_path: &std::path::Path,
@@ -411,85 +393,5 @@ async fn apply_appimage(
 
     fs::remove_file(appimage_path).await.ok();
     info!("Linux AppImage applied to {}", dest.display());
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-async fn apply_deb(deb_path: &std::path::Path) -> anyhow::Result<()> {
-    run_privileged_install(&["dpkg", "-i"], deb_path).await?;
-    tokio::fs::remove_file(deb_path).await.ok();
-    info!("Linux deb applied");
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-async fn apply_rpm(rpm_path: &std::path::Path) -> anyhow::Result<()> {
-    if which_exists("dnf") {
-        run_privileged_install(&["dnf", "install", "-y"], rpm_path).await?;
-    } else if which_exists("zypper") {
-        run_privileged_install(&["zypper", "--non-interactive", "install"], rpm_path).await?;
-    } else {
-        run_privileged_install(&["rpm", "-Uvh"], rpm_path).await?;
-    }
-
-    tokio::fs::remove_file(rpm_path).await.ok();
-    info!("Linux rpm applied");
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-async fn apply_pacman(pacman_path: &std::path::Path) -> anyhow::Result<()> {
-    run_privileged_install(&["pacman", "-U", "--noconfirm"], pacman_path).await?;
-    tokio::fs::remove_file(pacman_path).await.ok();
-    info!("Linux pacman applied");
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn which_exists(bin: &str) -> bool {
-    std::process::Command::new("which")
-        .arg(bin)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-#[cfg(target_os = "linux")]
-async fn run_privileged_install(
-    command: &[&str],
-    package_path: &std::path::Path,
-) -> anyhow::Result<()> {
-    use tokio::process::Command;
-
-    let mut pkexec_args: Vec<&str> = command.to_vec();
-    let package = package_path
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("Invalid package path"))?;
-    pkexec_args.push(package);
-
-    let pkexec_status = Command::new("pkexec").args(&pkexec_args).status().await;
-
-    if let Ok(status) = pkexec_status {
-        if status.success() {
-            return Ok(());
-        }
-    }
-
-    let status = Command::new(command[0])
-        .args(&command[1..])
-        .arg(package_path)
-        .status()
-        .await?;
-
-    if !status.success() {
-        return Err(anyhow::anyhow!(
-            "{} install failed for {}",
-            command[0],
-            package_path.display()
-        ));
-    }
-
     Ok(())
 }

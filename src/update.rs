@@ -27,6 +27,16 @@ struct AsarAsset {
 struct PlatformAsset {
     url: String,
     sha256: String,
+    #[serde(rename = "packageUrl", default)]
+    package_url: Option<String>,
+    #[serde(rename = "packageSha256", default)]
+    package_sha256: Option<String>,
+    #[serde(rename = "setupUrl", default)]
+    #[allow(dead_code)]
+    setup_url: Option<String>,
+    #[serde(rename = "setupSha256", default)]
+    #[allow(dead_code)]
+    setup_sha256: Option<String>,
     #[serde(rename = "electronVersion", default)]
     electron_version: Option<String>,
     #[serde(rename = "updaterVersion", default)]
@@ -80,6 +90,11 @@ impl UpdateManifest {
     }
 
     pub fn asar_update(&self) -> Option<AsarUpdate> {
+        #[cfg(target_os = "macos")]
+        {
+            return None;
+        }
+
         let asset = self.asset_for_current_platform()?;
         let asar = asset.asar?;
         let remote_electron = asset.electron_version?;
@@ -109,6 +124,17 @@ impl UpdateManifest {
             url: asar.url,
             sha256: asar.sha256,
         })
+    }
+
+    pub fn package_download_for_current_platform(&self) -> Option<(String, String)> {
+        let asset = self.asset_for_current_platform()?;
+        if let (Some(url), Some(sha)) = (&asset.package_url, &asset.package_sha256) {
+            return Some((url.clone(), sha.clone()));
+        }
+        if crate::layout::can_apply_full_zip() {
+            return Some((asset.url.clone(), asset.sha256.clone()));
+        }
+        None
     }
 }
 
@@ -323,12 +349,12 @@ pub fn set_installed_updater_version(version: &str) {
     info!("Wrote installed updater version: {}", version);
 }
 
-pub fn update_temp_dir() -> PathBuf {
-    std::env::temp_dir().join("mutualzz-update")
+pub fn packages_dir() -> PathBuf {
+    crate::layout::packages_dir()
 }
 
-pub fn cleanup_update_temp() {
-    let dir = update_temp_dir();
+pub fn cleanup_packages_dir() {
+    let dir = packages_dir();
     if !dir.is_dir() {
         return;
     }
@@ -340,10 +366,30 @@ pub fn cleanup_update_temp() {
             }
         }
     }
-    info!("Cleaned update temp dir {}", dir.display());
+    info!("Cleaned packages dir {}", dir.display());
+}
+
+pub fn cleanup_update_temp() {
+    cleanup_packages_dir();
 }
 
 pub async fn check_for_update() -> anyhow::Result<Option<UpdateManifest>> {
+    let manifest = fetch_manifest().await?;
+
+    let remote = Version::parse(&manifest.version)?;
+    let installed = get_installed_version();
+    let current = Version::parse(&installed)?;
+
+    debug!("Remote: {}, installed: {}", remote, current);
+
+    if remote > current {
+        Ok(Some(manifest))
+    } else {
+        Ok(None)
+    }
+}
+
+async fn fetch_manifest() -> anyhow::Result<UpdateManifest> {
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(8))
         .build()?;
@@ -357,18 +403,7 @@ pub async fn check_for_update() -> anyhow::Result<Option<UpdateManifest>> {
         .json()
         .await?;
 
-    let remote = Version::parse(&manifest.version)?;
-
-    let installed = get_installed_version();
-    let current = Version::parse(&installed)?;
-
-    debug!("Remote: {}, installed: {}", remote, current);
-
-    if remote > current {
-        Ok(Some(manifest))
-    } else {
-        Ok(None)
-    }
+    Ok(manifest)
 }
 
 pub fn format_download_status(percent: f64, bps: u64, downloaded: u64, total: u64) -> String {
@@ -426,7 +461,7 @@ where
         .timeout(std::time::Duration::from_secs(300))
         .build()?;
 
-    let tmp_dir = update_temp_dir();
+    let tmp_dir = packages_dir();
     tokio::fs::create_dir_all(&tmp_dir).await?;
 
     let file_name = url
@@ -553,14 +588,58 @@ pub async fn download_update<F>(
 where
     F: FnMut(f64, u64, u64, u64),
 {
-    let asset = manifest
-        .asset_for_current_platform()
-        .ok_or_else(|| anyhow::anyhow!("No asset for current platform"))?;
+    let (url, sha256) = manifest
+        .package_download_for_current_platform()
+        .ok_or_else(|| anyhow::anyhow!("No package for current platform"))?;
 
-    info!("Downloading: {}", asset.url);
-    let dest = download_and_verify(&asset.url, &asset.sha256, on_progress).await?;
-    info!("Download verified: {}", dest.display());
+    info!("Downloading package: {}", url);
+    let dest = download_and_verify(&url, &sha256, on_progress).await?;
+    info!("Package download verified: {}", dest.display());
     Ok(dest)
+}
+
+pub enum StagedApplyOutcome {
+    None,
+    AppliedInProcess,
+}
+
+pub async fn apply_staged_or_pending() -> anyhow::Result<StagedApplyOutcome> {
+    crate::layout::ensure_data_dirs();
+
+    if let Some(pending) = crate::layout::read_pending_restart() {
+        crate::layout::clear_pending_restart();
+        let artifact = crate::layout::packages_dir().join(&pending.artifact);
+        if artifact.is_file() {
+            info!("Applying pending restart package: {}", artifact.display());
+            crate::platform::apply_update(
+                &artifact,
+                &pending.version,
+                pending.electron_version.as_deref(),
+                pending.updater_version.as_deref(),
+            )
+            .await?;
+            return Ok(StagedApplyOutcome::AppliedInProcess);
+        }
+    }
+
+    if let Some(staged) = crate::layout::find_staged_package() {
+        if let Ok(manifest) = fetch_manifest().await {
+            let version = manifest.version.clone();
+            let electron = manifest.electron_version_for_current_platform();
+            let updater = manifest.updater_version_for_current_platform();
+            info!("Applying staged package: {}", staged.display());
+            crate::platform::apply_update(
+                &staged,
+                &version,
+                electron.as_deref(),
+                updater.as_deref(),
+            )
+            .await?;
+            return Ok(StagedApplyOutcome::AppliedInProcess);
+        }
+    }
+
+    Ok(StagedApplyOutcome::None)
 }
 
 pub async fn download_asar_update<F>(asar: &AsarUpdate, on_progress: F) -> anyhow::Result<PathBuf>
