@@ -40,10 +40,38 @@ fn main() {
         warn!("Legacy layout migration failed: {}", e);
     }
 
+    #[cfg(windows)]
+    {
+        if layout::layout_v2_marker().is_file() {
+            if let Some(version) = layout::read_current_version() {
+                let _ = install::register_windows_uninstall_entry(&version);
+            }
+        }
+    }
+
     let args: Vec<String> = std::env::args().collect();
     let splash_fast = args.iter().any(|a| a == "--fast");
 
     let _lock = acquire_single_instance_lock();
+
+    if args.iter().any(|a| a == "--uninstall") {
+        #[cfg(windows)]
+        {
+            match install::run_uninstall() {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    error!("Uninstall failed: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        #[cfg(not(windows))]
+        {
+            error!("Uninstall is only supported on Windows");
+            std::process::exit(1);
+        }
+    }
 
     if args.iter().any(|a| a == "--splash-test") {
         let (tx, rx) = std::sync::mpsc::channel::<SplashCmd>();

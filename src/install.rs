@@ -41,7 +41,7 @@ pub async fn run_install(
     #[cfg(target_os = "windows")]
     {
         rewrite_windows_shortcuts()?;
-        register_run_key()?;
+        register_windows_uninstall_entry(&version)?;
     }
 
     std::fs::write(layout::layout_v2_marker(), b"2").ok();
@@ -141,29 +141,116 @@ $s.Save()
 }
 
 #[cfg(target_os = "windows")]
-fn register_run_key() -> anyhow::Result<()> {
+const UNINSTALL_REG_KEY: &str =
+    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\Mutualzz";
+
+#[cfg(target_os = "windows")]
+pub fn register_windows_uninstall_entry(version: &str) -> anyhow::Result<()> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-    let update = layout::data_root().join("Update.exe");
-    let status = std::process::Command::new("reg")
+    let install_dir = layout::data_root();
+    let update_exe = install_dir.join("Update.exe");
+    let icon = layout::resolve_active_app_dir()
+        .map(|d| d.join("mutualzz.exe"))
+        .filter(|p| p.is_file())
+        .unwrap_or_else(|| update_exe.clone());
+
+    let uninstall = format!(
+        "\"{}\" --uninstall",
+        update_exe.to_string_lossy().replace('"', "\\\"")
+    );
+
+    let entries: [(&str, &str, &str); 8] = [
+        ("DisplayName", "REG_SZ", "Mutualzz"),
+        ("DisplayVersion", "REG_SZ", version),
+        ("Publisher", "REG_SZ", "Mutualzz"),
+        ("InstallLocation", "REG_SZ", &install_dir.to_string_lossy()),
+        ("DisplayIcon", "REG_SZ", &icon.to_string_lossy()),
+        ("UninstallString", "REG_SZ", &uninstall),
+        ("NoModify", "REG_DWORD", "1"),
+        ("NoRepair", "REG_DWORD", "1"),
+    ];
+
+    for (name, value_type, data) in entries {
+        let status = std::process::Command::new("reg")
+            .args([
+                "add",
+                UNINSTALL_REG_KEY,
+                "/v",
+                name,
+                "/t",
+                value_type,
+                "/d",
+                data,
+                "/f",
+            ])
+            .creation_flags(CREATE_NO_WINDOW)
+            .status()?;
+
+        if !status.success() {
+            error!("Uninstall registry write failed for {} ({:?})", name, status.code());
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+pub fn run_uninstall() -> anyhow::Result<()> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    let desktop = dirs::desktop_dir().unwrap_or_else(|| layout::data_root());
+    let desktop_lnk = desktop.join("Mutualzz.lnk");
+    let start_menu = dirs::data_local_dir()
+        .unwrap_or_else(|| layout::data_root())
+        .join("Programs")
+        .join("Mutualzz");
+
+    let ps = format!(
+        r#"
+Remove-Item -LiteralPath '{desktop}' -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath '{start}' -Recurse -Force -ErrorAction SilentlyContinue
+"#,
+        desktop = desktop_lnk.to_string_lossy().replace('\'', "''"),
+        start = start_menu.to_string_lossy().replace('\'', "''"),
+    );
+
+    let _ = std::process::Command::new("powershell")
         .args([
-            "add",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &ps,
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
+        .status();
+
+    let _ = std::process::Command::new("reg")
+        .args([
+            "delete",
             r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
             "/v",
             "Mutualzz",
-            "/t",
-            "REG_SZ",
-            "/d",
-            &update.to_string_lossy(),
             "/f",
         ])
         .creation_flags(CREATE_NO_WINDOW)
-        .status()?;
+        .status();
 
-    if !status.success() {
-        error!("Run key registration failed {:?}", status.code());
+    let _ = std::process::Command::new("reg")
+        .args(["delete", UNINSTALL_REG_KEY, "/f"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .status();
+
+    let root = layout::data_root();
+    if root.exists() {
+        std::fs::remove_dir_all(&root)?;
     }
+
+    info!("Uninstall complete");
     Ok(())
 }
 
