@@ -76,6 +76,16 @@ fn main() {
                 .and_then(|p| args.get(p + 1))
                 .cloned()
                 .unwrap_or_else(|| "pending".to_string());
+            let electron_version = args
+                .iter()
+                .position(|a| a == "--electron-version")
+                .and_then(|p| args.get(p + 1))
+                .cloned();
+            let updater_version = args
+                .iter()
+                .position(|a| a == "--updater-version")
+                .and_then(|p| args.get(p + 1))
+                .cloned();
 
             info!("--apply mode: {} (version: {})", path.display(), version);
 
@@ -88,7 +98,14 @@ fn main() {
                 rt.block_on(async move {
                     let _ = splash_tx.send(SplashCmd::SetStatus("Applying update...".into()));
 
-                    match platform::apply_update(&path, &version, None, None).await {
+                    match platform::apply_update(
+                        &path,
+                        &version,
+                        electron_version.as_deref(),
+                        updater_version.as_deref(),
+                    )
+                    .await
+                    {
                         Ok(_) => {
                             update::cleanup_update_temp();
                             apply_ok_thread.store(true, Ordering::SeqCst);
