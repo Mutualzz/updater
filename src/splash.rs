@@ -25,6 +25,7 @@ const ICON_HOLD: f64 = 1.5;
 const ICON_MOVE: f64 = 0.55;
 
 const PENTAGRAM_BYTES: &[u8] = include_bytes!("../resources/logo/pentagram_overlay.png");
+const APP_ICON_BYTES: &[u8] = include_bytes!("../resources/icon.ico");
 const CENTER_ICON: (&str, &[u8]) = ("anarchy", include_bytes!("../resources/logo/anarchy.png"));
 const ORBIT_ICONS: &[(&str, &[u8])] = &[
     ("cathedral", include_bytes!("../resources/logo/cathedral.png")),
@@ -325,6 +326,18 @@ impl eframe::App for SplashApp {
     }
 }
 
+fn app_icon() -> Arc<egui::IconData> {
+    let img = image::load_from_memory(APP_ICON_BYTES)
+        .expect("Failed to load icon.ico")
+        .to_rgba8();
+    let (width, height) = img.dimensions();
+    Arc::new(egui::IconData {
+        rgba: img.into_raw(),
+        width,
+        height,
+    })
+}
+
 pub fn run(rx: std::sync::mpsc::Receiver<SplashCmd>, skip_launch: Option<Arc<AtomicBool>>) {
     let state = Arc::new(Mutex::new(SplashState {
         status: "Checking for updates...".into(),
@@ -357,7 +370,8 @@ pub fn run(rx: std::sync::mpsc::Receiver<SplashCmd>, skip_launch: Option<Arc<Ato
             .with_decorations(false)
             .with_transparent(true)
             .with_always_on_top()
-            .with_taskbar(true),
+            .with_taskbar(true)
+            .with_icon(app_icon()),
         centered: true,
         vsync: true,
         ..Default::default()
