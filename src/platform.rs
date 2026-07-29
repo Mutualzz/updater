@@ -331,7 +331,7 @@ fn relaunch_bootstrapper() -> ! {
 
 #[cfg(windows)]
 fn relaunch_bootstrapper() -> ! {
-    let exe = crate::layout::bootstrapper_at_data_root();
+    let exe = crate::layout::bootstrapper_relaunch_path();
     use std::os::windows::process::CommandExt;
     const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x01000000;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
