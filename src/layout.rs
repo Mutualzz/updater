@@ -254,23 +254,74 @@ pub fn ensure_data_dirs() {
     let _ = std::fs::create_dir_all(data_root());
 }
 
+pub fn bootstrapper_relaunch_path() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(app_dir) = resolve_active_app_dir() {
+            let in_app = app_dir.join("Update.exe");
+            if in_app.is_file() {
+                return in_app;
+            }
+        }
+    }
+
+    bootstrapper_at_data_root()
+}
+
 pub fn hoist_windows_update_exe(app_dir: &Path) -> anyhow::Result<()> {
     #[cfg(target_os = "windows")]
     {
-        let candidates = [
-            app_dir.join("Update.exe"),
-            app_dir.join("updater.exe"),
-        ];
+        let candidates = [app_dir.join("Update.exe"), app_dir.join("updater.exe")];
         let dest = data_root().join("Update.exe");
         std::fs::create_dir_all(data_root())?;
+
+        let current_exe = std::env::current_exe().ok();
+        if same_path(current_exe.as_deref(), Some(&dest)) {
+            info!("Skipping bootstrapper hoist while Update.exe is running");
+            return Ok(());
+        }
+
         for src in candidates {
-            if src.is_file() {
-                std::fs::copy(&src, &dest)?;
-                info!("Hoisted bootstrapper to {}", dest.display());
+            if !src.is_file() {
+                continue;
+            }
+
+            if same_path(Some(&src), Some(&dest)) {
                 return Ok(());
             }
+
+            match std::fs::copy(&src, &dest) {
+                Ok(_) => {
+                    info!("Hoisted bootstrapper to {}", dest.display());
+                    return Ok(());
+                }
+                Err(err) if err.raw_os_error() == Some(32) => {
+                    warn!(
+                        "Bootstrapper is in use; {} will be hoisted on the next launch",
+                        dest.display()
+                    );
+                    return Ok(());
+                }
+                Err(err) => return Err(err.into()),
+            }
         }
+
         warn!("No Update.exe found in {}", app_dir.display());
     }
     Ok(())
+}
+
+fn same_path(left: Option<&Path>, right: Option<&Path>) -> bool {
+    match (left, right) {
+        (Some(a), Some(b)) => {
+            if a == b {
+                return true;
+            }
+            match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+                (Ok(a), Ok(b)) => a == b,
+                _ => false,
+            }
+        }
+        _ => false,
+    }
 }

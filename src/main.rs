@@ -41,6 +41,11 @@ fn main() {
     }
 
     #[cfg(windows)]
+    if let Some(app_dir) = layout::resolve_active_app_dir() {
+        let _ = layout::hoist_windows_update_exe(&app_dir);
+    }
+
+    #[cfg(windows)]
     {
         if layout::layout_v2_marker().is_file() {
             if let Some(version) = layout::read_current_version() {
