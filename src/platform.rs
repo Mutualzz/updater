@@ -220,6 +220,9 @@ pub async fn extract_zip_package(zip_path: &Path, dest: &Path) -> anyhow::Result
     use std::io::Read;
     use zip::ZipArchive;
 
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
     tokio::fs::create_dir_all(dest).await?;
     let file = std::fs::File::open(zip_path)?;
     let mut archive = ZipArchive::new(file)?;
@@ -229,6 +232,8 @@ pub async fn extract_zip_package(zip_path: &Path, dest: &Path) -> anyhow::Result
         let raw_name = entry.name().to_string();
         let normalized = raw_name.replace('\\', "/");
         let is_dir = normalized.ends_with('/');
+        #[cfg(unix)]
+        let unix_mode = entry.unix_mode();
 
         let Some(relative) = sanitize_zip_entry(&normalized) else {
             continue;
@@ -248,6 +253,19 @@ pub async fn extract_zip_package(zip_path: &Path, dest: &Path) -> anyhow::Result
         let mut buffer = Vec::new();
         entry.read_to_end(&mut buffer)?;
         tokio::fs::write(&out_path, buffer).await?;
+
+        #[cfg(unix)]
+        {
+            let mode = unix_mode.map(|mode| mode & 0o7777).or_else(|| {
+                normalized
+                    .contains("Contents/MacOS/")
+                    .then_some(0o755)
+            });
+            if let Some(mode) = mode {
+                tokio::fs::set_permissions(&out_path, std::fs::Permissions::from_mode(mode))
+                    .await?;
+            }
+        }
     }
 
     info!("Extracted {} → {}", zip_path.display(), dest.display());
