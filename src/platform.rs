@@ -235,6 +235,10 @@ pub async fn extract_zip_package(zip_path: &Path, dest: &Path) -> anyhow::Result
         #[cfg(unix)]
         let unix_mode = entry.unix_mode();
 
+        let is_symlink = unix_mode
+          .map(|mode| mode & 0o170000 == 0o120000)
+          .unwrap_or(false);
+
         let Some(relative) = sanitize_zip_entry(&normalized) else {
             continue;
         };
@@ -248,6 +252,23 @@ pub async fn extract_zip_package(zip_path: &Path, dest: &Path) -> anyhow::Result
 
         if let Some(parent) = out_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
+        }
+
+        if is_symlink {
+          use std::os::unix::fs::symlink;
+
+          let mut target = String::new();
+          entry.read_to_string(&mut target)?;
+
+          let target = target.trim_end_matches('\0');
+
+          if Path::new(target).is_absolute() || target.split("/").any(|c| c == "..") {
+            anyhow::bail!("Invalid symlink target: {}", target);
+          }
+
+          symlink(target, &out_path)?;
+
+          continue;
         }
 
         let mut buffer = Vec::new();
