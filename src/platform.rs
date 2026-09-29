@@ -220,7 +220,7 @@ pub async fn extract_zip_package(zip_path: &Path, dest: &Path) -> anyhow::Result
     use std::io::Read;
     use zip::ZipArchive;
 
-    #[cfg(unix)]
+  #[cfg(target_family = "unix")]
     use std::os::unix::fs::PermissionsExt;
 
     tokio::fs::create_dir_all(dest).await?;
@@ -232,7 +232,7 @@ pub async fn extract_zip_package(zip_path: &Path, dest: &Path) -> anyhow::Result
         let raw_name = entry.name().to_string();
         let normalized = raw_name.replace('\\', "/");
         let is_dir = normalized.ends_with('/');
-        #[cfg(unix)]
+        #[cfg(target_family = "unix")]
         let unix_mode = entry.unix_mode();
 
         let is_symlink = unix_mode
