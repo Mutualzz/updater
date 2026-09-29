@@ -240,7 +240,7 @@ fn acquire_single_instance_lock() -> Option<std::fs::File> {
         }
     }
 
-    #[cfg(target_family = "unix")]
+    #[cfg(unix)]
     {
         use std::os::unix::io::AsRawFd;
         match std::fs::OpenOptions::new()

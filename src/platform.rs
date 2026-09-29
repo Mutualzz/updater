@@ -102,7 +102,7 @@ pub fn exec_into_electron() -> ! {
     let electron_path = electron_exe_path();
     info!("Launching Electron: {}", electron_path.display());
 
-    #[cfg(target_family = "unix")]
+    #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         let err = std::process::Command::new(&electron_path).exec();
@@ -220,7 +220,7 @@ pub async fn extract_zip_package(zip_path: &Path, dest: &Path) -> anyhow::Result
     use std::io::Read;
     use zip::ZipArchive;
 
-  #[cfg(target_family = "unix")]
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     tokio::fs::create_dir_all(dest).await?;
@@ -232,9 +232,10 @@ pub async fn extract_zip_package(zip_path: &Path, dest: &Path) -> anyhow::Result
         let raw_name = entry.name().to_string();
         let normalized = raw_name.replace('\\', "/");
         let is_dir = normalized.ends_with('/');
-        #[cfg(target_family = "unix")]
+        #[cfg(unix)]
         let unix_mode = entry.unix_mode();
 
+        #[cfg(unix)]
         let is_symlink = unix_mode
           .map(|mode| mode & 0o170000 == 0o120000)
           .unwrap_or(false);
@@ -254,6 +255,7 @@ pub async fn extract_zip_package(zip_path: &Path, dest: &Path) -> anyhow::Result
             tokio::fs::create_dir_all(parent).await?;
         }
 
+        #[cfg(unix)]
         if is_symlink {
           use std::os::unix::fs::symlink;
 
@@ -275,7 +277,7 @@ pub async fn extract_zip_package(zip_path: &Path, dest: &Path) -> anyhow::Result
         entry.read_to_end(&mut buffer)?;
         tokio::fs::write(&out_path, buffer).await?;
 
-       #[cfg(target_family = "unix")]
+       #[cfg(unix)]
         {
             let mode = unix_mode.map(|mode| mode & 0o7777).or_else(|| {
                 normalized
@@ -357,7 +359,7 @@ fn update_format(path: &std::path::Path) -> String {
         .to_string()
 }
 
-#[cfg(target_family = "unix")]
+#[cfg(unix)]
 fn relaunch_bootstrapper() -> ! {
     let exe = crate::layout::bootstrapper_at_data_root();
 
