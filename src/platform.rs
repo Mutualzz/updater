@@ -102,7 +102,7 @@ pub fn exec_into_electron() -> ! {
     let electron_path = electron_exe_path();
     info!("Launching Electron: {}", electron_path.display());
 
-    #[cfg(unix)]
+    #[cfg(target_family = "unix")]
     {
         use std::os::unix::process::CommandExt;
         let err = std::process::Command::new(&electron_path).exec();
@@ -275,7 +275,7 @@ pub async fn extract_zip_package(zip_path: &Path, dest: &Path) -> anyhow::Result
         entry.read_to_end(&mut buffer)?;
         tokio::fs::write(&out_path, buffer).await?;
 
-        #[cfg(unix)]
+       #[cfg(target_family = "unix")]
         {
             let mode = unix_mode.map(|mode| mode & 0o7777).or_else(|| {
                 normalized
@@ -357,7 +357,7 @@ fn update_format(path: &std::path::Path) -> String {
         .to_string()
 }
 
-#[cfg(unix)]
+#[cfg(target_family = "unix")]
 fn relaunch_bootstrapper() -> ! {
     let exe = crate::layout::bootstrapper_at_data_root();
 
