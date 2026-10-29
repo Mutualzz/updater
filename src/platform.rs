@@ -324,8 +324,6 @@ fn sanitize_zip_entry(normalized: &str) -> Option<std::path::PathBuf> {
     }
 }
 
-// ditto stores xattrs as `._name` / `__MACOSX/` entries; extracting them as
-// plain files breaks the macOS code signature seal.
 fn is_apple_double(relative: &Path) -> bool {
     let in_macosx = relative
         .components()
