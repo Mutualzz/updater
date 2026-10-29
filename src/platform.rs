@@ -244,6 +244,10 @@ pub async fn extract_zip_package(zip_path: &Path, dest: &Path) -> anyhow::Result
             continue;
         };
 
+        if is_apple_double(&relative) {
+            continue;
+        }
+
         let out_path = dest.join(&relative);
 
         if is_dir {
@@ -318,6 +322,20 @@ fn sanitize_zip_entry(normalized: &str) -> Option<std::path::PathBuf> {
     } else {
         Some(path)
     }
+}
+
+// ditto stores xattrs as `._name` / `__MACOSX/` entries; extracting them as
+// plain files breaks the macOS code signature seal.
+fn is_apple_double(relative: &Path) -> bool {
+    let in_macosx = relative
+        .components()
+        .next()
+        .is_some_and(|c| c.as_os_str() == "__MACOSX");
+    let dot_underscore = relative
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.starts_with("._"));
+    in_macosx || dot_underscore
 }
 
 fn update_format(path: &std::path::Path) -> String {
